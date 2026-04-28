@@ -1,0 +1,6 @@
+node_modules
+dist
+*.xlsb
+*.xlsx
+*.csv
+.git
