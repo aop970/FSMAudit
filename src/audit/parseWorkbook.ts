@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import type {
   CloudRow, LaborRow, MgmtRow, OtApprovalRow,
-  ParsedData, PunchRow, RosterEntry, TieOutData, TimeOffRow,
+  ParsedData, PunchRow, RosterEntry, TermedPtoRow, TieOutData, TimeOffRow,
 } from './types';
 import { toNum, toStr, toPct } from '../lib/num';
 
@@ -264,24 +264,27 @@ function parseOtApprovalSheet(ws: XLSX.WorkSheet): OtApprovalRow[] {
   return out;
 }
 
-// ── first-tab metadata (E13 = invoice number, E14 = period range, E21 = invoice total) ──
+// ── first-tab metadata (E13 = invoice number, E14 = period range, E17 = PO#, E21 = invoice total) ──
 
 function readFirstTabMeta(wb: XLSX.WorkBook): {
   invoiceNumber: string | null;
   periodRange: string | null;
+  e17Value: string | null;
   invoiceTotalRaw: number | null;
 } {
   const firstName = wb.SheetNames[0];
-  if (!firstName) return { invoiceNumber: null, periodRange: null, invoiceTotalRaw: null };
+  if (!firstName) return { invoiceNumber: null, periodRange: null, e17Value: null, invoiceTotalRaw: null };
   const ws = wb.Sheets[firstName];
-  if (!ws) return { invoiceNumber: null, periodRange: null, invoiceTotalRaw: null };
+  if (!ws) return { invoiceNumber: null, periodRange: null, e17Value: null, invoiceTotalRaw: null };
   const e13 = ws['E13'] as XLSX.CellObject | undefined;
   const e14 = ws['E14'] as XLSX.CellObject | undefined;
+  const e17 = ws['E17'] as XLSX.CellObject | undefined;
   const e21 = ws['E21'] as XLSX.CellObject | undefined;
   const invoiceNumber   = e13?.v != null ? String(e13.v).trim() : null;
   const periodRange     = e14?.v != null ? String(e14.v).trim() : null;
+  const e17Value        = e17?.v != null ? String(e17.v).trim() : null;
   const invoiceTotalRaw = (e21?.t === 'n' && e21?.v != null) ? Number(e21.v) : null;
-  return { invoiceNumber, periodRange, invoiceTotalRaw };
+  return { invoiceNumber, periodRange, e17Value, invoiceTotalRaw };
 }
 
 // ── Invoice Summary / Tie-Out ─────────────────────────────────────────────────
@@ -444,6 +447,87 @@ export async function parseReferenceCSV(file: File): Promise<Record<string, stri
   });
 }
 
+// ── Termed PTO XLSX parser ────────────────────────────────────────────────────
+// Columns: Employee ID (A), Worker (B), Term Date (C), Program (D), Name (E), Hours (F)
+
+export async function parseTermedPtoFile(file: File): Promise<TermedPtoRow[]> {
+  const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as ArrayBuffer);
+    r.onerror = () => reject(r.error);
+    r.readAsArrayBuffer(file);
+  });
+
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  } catch {
+    return [];
+  }
+
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return [];
+
+  const aoa = XLSX.utils.sheet_to_json(ws, {
+    header: 1, raw: true, defval: null, blankrows: false,
+  }) as unknown[][];
+
+  if (aoa.length < 2) return [];
+
+  // Find header row
+  let hIdx = -1;
+  for (let i = 0; i < Math.min(5, aoa.length); i++) {
+    const row = aoa[i] || [];
+    if (row.some((c) => toStr(c).toLowerCase() === 'employee id') ||
+        row.some((c) => toStr(c).toLowerCase() === 'program')) {
+      hIdx = i; break;
+    }
+  }
+  if (hIdx < 0) return [];
+
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const col = (name: string) => headers.indexOf(name.toLowerCase());
+
+  const cId      = col('employee id');
+  const cWorker  = col('worker');
+  const cDate    = col('term date');
+  const cProgram = col('program');
+  const cName    = col('name');
+  const cHours   = col('hours');
+
+  const out: TermedPtoRow[] = [];
+  for (let i = hIdx + 1; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.every((v) => v == null || v === '')) continue;
+
+    const id = toStr(row[cId]);
+    if (!id) continue;
+
+    const rawDate = cDate >= 0 ? row[cDate] : null;
+    let termDate: Date | null = null;
+    if (typeof rawDate === 'number' && rawDate > 0) {
+      const d = XLSX.SSF.parse_date_code(rawDate);
+      if (d) termDate = new Date(d.y, d.m - 1, d.d);
+    } else if (rawDate instanceof Date) {
+      termDate = isNaN(rawDate.getTime()) ? null : rawDate;
+    } else if (rawDate) {
+      const d = new Date(toStr(rawDate));
+      termDate = isNaN(d.getTime()) ? null : d;
+    }
+
+    out.push({
+      rowNum: i + 1,
+      employeeId: id,
+      worker: toStr(row[cWorker]),
+      termDate,
+      program: cProgram >= 0 ? toStr(row[cProgram]) : '',
+      name: cName >= 0 ? toStr(row[cName]) : '',
+      hours: cHours >= 0 ? toNum(row[cHours]) : 0,
+    });
+  }
+  return out;
+}
+
 // ── main export ───────────────────────────────────────────────────────────────
 
 async function readBuf(file: File): Promise<ArrayBuffer> {
@@ -554,23 +638,25 @@ export async function parseInvoice(
     }
   }
 
-  // Pass 1 — lightweight read of just the first 20 rows to get cover tab metadata (E13/E14/E21).
+  // Pass 1 — lightweight read of just the first 25 rows to get cover tab metadata (E13/E14/E17/E21).
   let invoiceNumber: string | null = null;
   let periodRange: string | null = null;
+  let e17Value: string | null = null;
   let invoiceTotalRaw: number | null = null;
   try {
     const metaWb = XLSX.read(buf, {
       type: 'array',
       cellFormula: false,
       cellDates: false,
-      sheetRows: 20,   // only parse first 20 rows — fast
+      sheetRows: 25,   // only parse first 25 rows — fast
     });
     const meta = readFirstTabMeta(metaWb);
-    invoiceNumber = meta.invoiceNumber;
-    periodRange   = meta.periodRange;
+    invoiceNumber   = meta.invoiceNumber;
+    periodRange     = meta.periodRange;
+    e17Value        = meta.e17Value;
     invoiceTotalRaw = meta.invoiceTotalRaw;
   } catch {
-    // Non-fatal — checks 10/11 will report missing data
+    // Non-fatal — checks 10/11/13 will report missing data
   }
 
   const fsmI   = findSheet(wb, ['FSM I']);
@@ -648,6 +734,7 @@ export async function parseInvoice(
   return {
     fileName: invoiceFile.name,
     invoiceNumber,
+    e17Value,
     punchFileName,
     fsmIRows,
     fsmIIRows,
@@ -663,5 +750,6 @@ export async function parseInvoice(
     tabNames: wb.SheetNames,
     timeOffRows: [],
     timeOffFileNames: [],
+    termedPtoRows: [],
   };
 }

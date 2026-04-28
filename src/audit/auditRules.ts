@@ -21,6 +21,7 @@ export interface AuditRules {
     toLoad: string[];         // default: FSM I, FSM II, Management Detail Hours, Cloud Services, Roster, Roster II, Invoice Summary, OT Approval
     alwaysExclude: string[];  // default: SOW
   };
+  poNumber: string;            // default: T26C31H000162 — verified against E17 of first tab
   bragiSystemPrompt: string;
 }
 
@@ -51,6 +52,7 @@ export const DEFAULT_RULES: AuditRules = {
     ],
     alwaysExclude: ['SOW'],
   },
+  poNumber: 'T26C31H000162',
   bragiSystemPrompt:
     'You are an expert invoice auditor for a field services management program. ' +
     'You will receive a structured JSON summary of audit failures for a specific check. ' +
@@ -74,6 +76,7 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
       toLoad: stored.invoiceTabs?.toLoad ?? defaults.invoiceTabs.toLoad,
       alwaysExclude: stored.invoiceTabs?.alwaysExclude ?? defaults.invoiceTabs.alwaysExclude,
     },
+    poNumber: stored.poNumber ?? defaults.poNumber,
     bragiSystemPrompt: stored.bragiSystemPrompt ?? defaults.bragiSystemPrompt,
   };
 }

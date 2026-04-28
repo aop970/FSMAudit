@@ -386,7 +386,47 @@ function InvoiceTabsSection({ initial }: { initial: AuditRules['invoiceTabs'] })
   );
 }
 
-// ── Section 6: Bragi AI System Prompt ─────────────────────────────────────────
+// ── Section 6: PO Number ──────────────────────────────────────────────────────
+
+function PoNumberSection({ initial }: { initial: string }) {
+  const [value, setValue] = useState(initial);
+  const [saveState, triggerSave] = useSaveState();
+
+  const isDirty = value !== initial;
+
+  function handleSave() {
+    const ok = saveRulesSection('poNumber', value.trim() || DEFAULT_RULES.poNumber);
+    triggerSave(ok);
+  }
+
+  function handleReset() {
+    setValue(DEFAULT_RULES.poNumber);
+    const ok = resetSection('poNumber');
+    triggerSave(ok);
+  }
+
+  return (
+    <div className="section-block">
+      <SectionHeader title="PO Number" dirty={isDirty} />
+      <label className="block">
+        <span className="text-[11px] text-mc-dim mb-1 block">PO# (verified against cell E17 of first tab)</span>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className={inputCls}
+          style={inputStyle}
+          placeholder="T26C31H000162"
+          spellCheck={false}
+        />
+      </label>
+      <p className="mt-1 text-[10px] text-mc-dim">Changes quarterly — update here when it rolls over.</p>
+      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+    </div>
+  );
+}
+
+// ── Section 7: Bragi AI System Prompt ─────────────────────────────────────────
 
 function BragiPromptSection({ initial }: { initial: string }) {
   const [value, setValue] = useState(initial);
@@ -474,6 +514,7 @@ export function AuditRulesPanel({ onClose }: { onClose: () => void }) {
         <OtThresholdSection initial={rules.otThreshold} />
         <ToleranceSection initial={rules.tolerances} />
         <InvoiceTabsSection initial={rules.invoiceTabs} />
+        <PoNumberSection initial={rules.poNumber} />
         <BragiPromptSection initial={rules.bragiSystemPrompt} />
 
         {/* Reset all */}

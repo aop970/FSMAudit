@@ -15,6 +15,9 @@ import { check09TieOut } from './checks/check09_tieOut';
 import { check10InvoiceIdentity } from './checks/check10_invoiceIdentity';
 import { check11DateRange } from './checks/check11_dateRange';
 import { check12TimeOff } from './checks/check12_timeOff';
+import { check13PoNumber } from './checks/check13_poNumber';
+import { check14TermedPto } from './checks/check14_termedPto';
+import { getAuditRules } from './auditRules';
 
 function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -22,6 +25,7 @@ function fmtDate(d: Date): string {
 
 export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]): AuditPayload {
   const controlMap = buildControlMap(controlTable);
+  const rules = getAuditRules();
 
   const laborRows = [...parsed.fsmIRows, ...parsed.fsmIIRows];
   const fieldLaborTotal = laborRows.reduce((s, r) => s + r.billValue, 0);
@@ -51,6 +55,8 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     ),
     check11DateRange(parsed.fsmIRows, parsed.fsmIIRows, parsed.declaredPeriod),
     check12TimeOff(parsed.fsmIRows, parsed.fsmIIRows, parsed.timeOffRows),
+    check13PoNumber(parsed.e17Value, rules.poNumber),
+    check14TermedPto(parsed.fsmIRows, parsed.fsmIIRows, parsed.mgmtRows, parsed.termedPtoRows),
   ];
 
   const period = parsed.declaredPeriod

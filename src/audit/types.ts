@@ -84,6 +84,16 @@ export interface TimeOffRow {
   status: string;
 }
 
+export interface TermedPtoRow {
+  rowNum: number;
+  employeeId: string;
+  worker: string;
+  termDate: Date | null;
+  program: string;
+  name: string;
+  hours: number;
+}
+
 export interface TieOutData {
   fsmITotal: number;
   fsmIITotal: number;
@@ -104,6 +114,7 @@ export interface ControlTableEntry {
 export interface ParsedData {
   fileName: string;
   invoiceNumber: string | null;
+  e17Value: string | null;
   punchFileName: string | null;
   fsmIRows: LaborRow[];
   fsmIIRows: LaborRow[];
@@ -119,6 +130,7 @@ export interface ParsedData {
   tabNames: string[];
   timeOffRows: TimeOffRow[];
   timeOffFileNames: string[];
+  termedPtoRows: TermedPtoRow[];
 }
 
 export type AppState = 'idle' | 'parsing' | 'auditing' | 'done' | 'error';

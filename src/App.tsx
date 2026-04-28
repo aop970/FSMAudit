@@ -14,10 +14,10 @@ import {
   saveControlTable,
   getControlTableTimestamp,
 } from './audit/controlTable';
-import { parseInvoice, parseReferenceCSV, parseTimeOffFile } from './audit/parseWorkbook';
+import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile } from './audit/parseWorkbook';
 import { runAudit } from './audit/runAudit';
 import { getAuditRules } from './audit/auditRules';
-import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TimeOffRow } from './audit/types';
+import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow } from './audit/types';
 import { analyzeAllFailures } from './ai/bragiClient';
 import type { AnalyzeAllState } from './components/AnalyzeAllButton';
 
@@ -31,11 +31,12 @@ function deriveOverallStatus(results: AuditPayload['results']): 'pass' | 'fail' 
 
 export default function App() {
   // File state
-  const [invoiceFile, setInvoiceFile]   = useState<File | null>(null);
-  const [punchFile, setPunchFile]       = useState<File | null>(null);
-  const [refFile, setRefFile]           = useState<File | null>(null);
-  const [timeOffFile1, setTimeOffFile1] = useState<File | null>(null);
-  const [timeOffFile2, setTimeOffFile2] = useState<File | null>(null);
+  const [invoiceFile, setInvoiceFile]       = useState<File | null>(null);
+  const [punchFile, setPunchFile]           = useState<File | null>(null);
+  const [refFile, setRefFile]               = useState<File | null>(null);
+  const [timeOffFile1, setTimeOffFile1]     = useState<File | null>(null);
+  const [timeOffFile2, setTimeOffFile2]     = useState<File | null>(null);
+  const [termedPtoFile, setTermedPtoFile]   = useState<File | null>(null);
 
   // App state
   const [appState, setAppState]       = useState<AppState>('idle');
@@ -152,7 +153,15 @@ export default function App() {
         parsed.timeOffFileNames = timeOffFilesUploaded.map((f) => f.name);
       }
 
-      setStatusMsg('Running 12 audit checks…');
+      // Parse Termed PTO file and inject
+      if (termedPtoFile) {
+        setStatusMsg('Parsing Termed PTO file…');
+        await new Promise((r) => setTimeout(r, 0));
+        const termedRows: TermedPtoRow[] = await parseTermedPtoFile(termedPtoFile);
+        parsed.termedPtoRows = termedRows;
+      }
+
+      setStatusMsg('Running 14 audit checks…');
       setAppState('auditing');
 
       // Yield to event loop so UI updates
@@ -177,6 +186,7 @@ export default function App() {
     setRefFile(null);
     setTimeOffFile1(null);
     setTimeOffFile2(null);
+    setTermedPtoFile(null);
     setPayload(null);
     setAppState('idle');
     setErrorMsg(null);
@@ -237,6 +247,14 @@ export default function App() {
                 file={timeOffFile2}
                 optional
                 onFile={setTimeOffFile2}
+              />
+              <DropZone
+                label="Termed PTO"
+                sublabel=".xlsx (payroll payout file)"
+                accepts=".xlsx"
+                file={termedPtoFile}
+                optional
+                onFile={setTermedPtoFile}
               />
               <div ref={refZoneRef}>
                 <DropZone
@@ -331,7 +349,7 @@ export default function App() {
 
           {/* Run button */}
           <div className="mt-auto space-y-2">
-            {(invoiceFile || punchFile || timeOffFile1 || timeOffFile2 || payload) && (
+            {(invoiceFile || punchFile || timeOffFile1 || timeOffFile2 || termedPtoFile || payload) && (
               <button
                 type="button"
                 onClick={reset}
