@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Loader2, RotateCcw, Eye, EyeOff, Sparkles } from 'lucide-react';
 import { Header } from './components/Header';
-import { DropZone } from './components/DropZone';
+import { MultiDropZone } from './components/MultiDropZone';
 import { ControlTableBadge } from './components/ControlTableBadge';
 import { ControlTablePanel } from './components/ControlTablePanel';
 import { CheckCard } from './components/CheckCard';
@@ -216,56 +216,21 @@ export default function App() {
         >
           <div>
             <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-mc-dim">Upload Files</h2>
-            <div className="space-y-3">
-              <DropZone
-                label="Invoice File"
-                sublabel=".xlsb or .xlsx"
-                accepts=".xlsx,.xlsb"
-                file={invoiceFile}
-                onFile={setInvoiceFile}
+            <div ref={refZoneRef}>
+              <MultiDropZone
+                invoiceFile={invoiceFile}
+                punchFile={punchFile}
+                timeOffFile1={timeOffFile1}
+                timeOffFile2={timeOffFile2}
+                termedPtoFile={termedPtoFile}
+                refFile={refFile}
+                onInvoice={setInvoiceFile}
+                onPunch={setPunchFile}
+                onTimeOff1={setTimeOffFile1}
+                onTimeOff2={setTimeOffFile2}
+                onTermedPto={setTermedPtoFile}
+                onRef={setRefFile}
               />
-              <DropZone
-                label="Punch Detail"
-                sublabel=".csv (standalone export)"
-                accepts=".csv"
-                file={punchFile}
-                optional
-                onFile={setPunchFile}
-              />
-              <DropZone
-                label="Time Off Report – Week 1"
-                sublabel=".xlsx (approved time off)"
-                accepts=".xlsx"
-                file={timeOffFile1}
-                optional
-                onFile={setTimeOffFile1}
-              />
-              <DropZone
-                label="Time Off Report – Week 2"
-                sublabel=".xlsx (optional, 2nd week)"
-                accepts=".xlsx"
-                file={timeOffFile2}
-                optional
-                onFile={setTimeOffFile2}
-              />
-              <DropZone
-                label="Termed PTO"
-                sublabel=".xlsx (payroll payout file)"
-                accepts=".xlsx"
-                file={termedPtoFile}
-                optional
-                onFile={setTermedPtoFile}
-              />
-              <div ref={refZoneRef}>
-                <DropZone
-                  label="Reference File"
-                  sublabel=".csv — overrides control table"
-                  accepts=".csv,.xlsx"
-                  file={refFile}
-                  optional
-                  onFile={setRefFile}
-                />
-              </div>
             </div>
           </div>
 
