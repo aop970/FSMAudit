@@ -68,24 +68,54 @@ export async function analyzeCheck(
   return callClaude(apiKey, [payload]);
 }
 
+export interface EmailEntry {
+  subject: string;
+  body: string;
+  date?: string;
+}
+
 export async function analyzeAllFailures(
   apiKey: string,
   results: CheckResult[],
+  emails?: EmailEntry[],
 ): Promise<string> {
   const payloads = results
     .filter((r) => r.status === 'fail' || r.status === 'warning')
     .map(buildSinglePayload);
-  return callClaude(apiKey, payloads);
+  return callClaude(apiKey, payloads, emails);
+}
+
+function buildEmailContext(emails: EmailEntry[]): string {
+  // Sort by date desc if available, cap at 20 most recent
+  const sorted = [...emails].sort((a, b) => {
+    if (a.date && b.date) return new Date(b.date).getTime() - new Date(a.date).getTime();
+    return 0;
+  }).slice(0, 20);
+
+  return `---
+ONE-OFF EMAIL CONTEXT (${sorted.length} emails from audit folder):
+
+${sorted.map((e, i) => `Email ${i + 1}:
+Subject: ${e.subject}
+Date: ${e.date || 'unknown'}
+Body: ${e.body.slice(0, 800)}`).join('\n\n')}
+
+Based on these emails, identify any one-off instructions, exceptions, rate changes, employee-specific notes, or billing holds that are relevant to this invoice audit. List them as "One-Off Reminders" — not hard failures, but things to be aware of and verify manually. Format them as a bulleted list under a heading "📬 One-Off Reminders from Email Context".`;
 }
 
 async function callClaude(
   apiKey: string,
   findings: FailureSummary[],
+  emails?: EmailEntry[],
 ): Promise<string> {
   const rules = getAuditRules();
   const systemPrompt = rules.bragiSystemPrompt;
 
-  const userMessage = `Audit findings requiring analysis:\n\n${JSON.stringify(findings, null, 2)}`;
+  const emailSection = emails && emails.length > 0
+    ? `\n\n${buildEmailContext(emails)}`
+    : '';
+
+  const userMessage = `Audit findings requiring analysis:\n\n${JSON.stringify(findings, null, 2)}${emailSection}`;
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',

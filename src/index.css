@@ -23,6 +23,33 @@ body {
   -webkit-font-smoothing: antialiased;
   background-color: var(--mc-bg);
   color: var(--mc-text);
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ── Light mode overrides (toggled by Mission Control via postMessage) ── */
+body.light-mode {
+  --bg: #f3f4f6;
+  --card-bg: #ffffff;
+  --border: #d1d5db;
+  --accent: #2563eb;
+  --text: #111827;
+  --text-dim: #6b7280;
+  --green: #16a34a;
+  --blue: #2563eb;
+  /* Remap MC palette variables so Tailwind classes & inline refs work */
+  --mc-bg: #f3f4f6;
+  --mc-bg2: #ffffff;
+  --mc-card-bg: rgba(255, 255, 255, 0.92);
+  --mc-card-border: rgba(209, 213, 219, 0.8);
+  --mc-text: #111827;
+  --mc-text-dim: #6b7280;
+  --mc-blue: #2563eb;
+  --mc-green: #16a34a;
+  --mc-amber: #d97706;
+  --mc-gold: #b45309;
+  --mc-teal: #0d9488;
+  background-color: var(--mc-bg);
+  color: var(--mc-text);
 }
 
 /* Prose styles for Bragi markdown output */
