@@ -6,9 +6,7 @@
 //   required_field   — a named field on LaborRow must be non-empty/non-null
 //
 // Entry type matching: rule.entryTypes are matched against LaborRow.comments (case-insensitive trim).
-// State filter: matched as a case-insensitive substring of LaborRow.comments.
-//   Note: LaborRow has no dedicated state/location column — when the invoice adds one,
-//   extend this check to use it. For now, filtering is applied to the comments field.
+// State filter: matched as a case-insensitive substring of LaborRow.associateState (Column J).
 
 import type { CheckResult, LaborRow } from '../types';
 import { getAuditRules, type CustomRule } from '../auditRules';
@@ -23,8 +21,8 @@ function matchesEntryType(row: LaborRow, entryTypes: string[]): boolean {
 
 function matchesStateFilter(row: LaborRow, stateFilter: string | undefined): boolean {
   if (!stateFilter || stateFilter.trim() === '') return true;
-  // Match against comments as a substring (case-insensitive)
-  return row.comments.toLowerCase().includes(stateFilter.trim().toLowerCase());
+  // Match against associateState (Column J — "Associate State") as a case-insensitive substring
+  return row.associateState.toLowerCase().includes(stateFilter.trim().toLowerCase());
 }
 
 function applyRule(row: LaborRow, rule: CustomRule): string | null {

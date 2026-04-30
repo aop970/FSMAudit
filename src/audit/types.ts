@@ -23,6 +23,7 @@ export interface LaborRow {
   billValue: number;
   billFormula?: string;
   loadedRate: number;
+  associateState: string;
   comments: string;
   visitDate: Date | null;
   week: number | null;

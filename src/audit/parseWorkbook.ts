@@ -100,17 +100,18 @@ function parseLaborSheet(label: string, ws: XLSX.WorkSheet): LaborRow[] {
   const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
   const col = (label: string) => headers.indexOf(label.toLowerCase());
 
-  const cWeek = col('week');
-  const cName = col('employee name');
-  const cId   = col('associate id');
-  const cType = col('associate type');
-  const cDate = col('visit date');
-  const cHrs  = col('time hours');
-  const cBase = col('base pay rate');
-  const cMu   = col('mu');
+  const cWeek  = col('week');
+  const cName  = col('employee name');
+  const cId    = col('associate id');
+  const cType  = col('associate type');
+  const cDate  = col('visit date');
+  const cHrs   = col('time hours');
+  const cBase  = col('base pay rate');
+  const cMu    = col('mu');
   const cLoaded = col('pay rate total');
-  const cBill = col('bill');
-  const cCmt  = col('comments');
+  const cBill  = col('bill');
+  const cState = col('associate state');
+  const cCmt   = col('comments');
 
   const out: LaborRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
@@ -136,9 +137,10 @@ function parseLaborSheet(label: string, ws: XLSX.WorkSheet): LaborRow[] {
       muFormula,
       billValue:  toNum(row[cBill]),
       billFormula,
-      loadedRate: toNum(row[cLoaded]),
-      comments:   toStr(row[cCmt]),
-      visitDate:  toDate(row[cDate]),
+      loadedRate:     toNum(row[cLoaded]),
+      associateState: cState >= 0 ? toStr(row[cState]) : '',
+      comments:       toStr(row[cCmt]),
+      visitDate:      toDate(row[cDate]),
       week: cWeek >= 0 && row[cWeek] != null ? (toNum(row[cWeek]) || null) : null,
     });
   }
