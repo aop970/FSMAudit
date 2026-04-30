@@ -3,10 +3,26 @@
 // On load: if key missing, write defaults silently. No user prompt.
 // All audit engine reads go through getAuditRules() — never hardcoded constants.
 
+export type RuleType = 'date_granularity' | 'positive_hours' | 'required_field';
+
+export interface CustomRule {
+  id: string;           // timestamp string used as unique key
+  name: string;
+  enabled: boolean;
+  entryTypes: string[]; // matches against LaborRow.comments (case-insensitive), e.g. ["Over Time", "Time Off"]
+  ruleType: RuleType;
+  stateFilter?: string; // optional — matches against LaborRow.comments (case-insensitive substring)
+  fieldName?: string;   // for required_field rule type — LaborRow field name to check
+}
+
 export interface AuditRules {
   markupRates: {
     ft: number;   // default 0.2993
     pt: number;   // default 0.2770
+  };
+  hourlyRates: {
+    fsmI: number;   // $/hr base rate for FSM I rows; 0 = not configured (skip check)
+    fsmII: number;  // $/hr base rate for FSM II rows; 0 = not configured (skip check)
   };
   punchCategories: {
     supported: string[];  // default: Work, Travel, Admin, Training, Meeting, Break
@@ -23,12 +39,17 @@ export interface AuditRules {
   };
   poNumber: string;            // default: T26C31H000162 — verified against E17 of first tab
   bragiSystemPrompt: string;
+  customRules: CustomRule[];   // user-defined audit constraints, run as Check 15
 }
 
 export const DEFAULT_RULES: AuditRules = {
   markupRates: {
     ft: 0.2993,
     pt: 0.2770,
+  },
+  hourlyRates: {
+    fsmI: 0,
+    fsmII: 0,
   },
   punchCategories: {
     supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
@@ -53,6 +74,7 @@ export const DEFAULT_RULES: AuditRules = {
     alwaysExclude: ['SOW'],
   },
   poNumber: 'T26C31H000162',
+  customRules: [],
   bragiSystemPrompt:
     'You are an expert invoice auditor for a field services management program. ' +
     'You will receive a structured JSON summary of audit failures for a specific check. ' +
@@ -66,6 +88,7 @@ const STORAGE_KEY = 'fsm-audit-rules';
 function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRules {
   return {
     markupRates: { ...defaults.markupRates, ...(stored.markupRates ?? {}) },
+    hourlyRates: { ...defaults.hourlyRates, ...(stored.hourlyRates ?? {}) },
     punchCategories: {
       supported: stored.punchCategories?.supported ?? defaults.punchCategories.supported,
       exceptions: stored.punchCategories?.exceptions ?? defaults.punchCategories.exceptions,
@@ -78,6 +101,7 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
     },
     poNumber: stored.poNumber ?? defaults.poNumber,
     bragiSystemPrompt: stored.bragiSystemPrompt ?? defaults.bragiSystemPrompt,
+    customRules: stored.customRules ?? defaults.customRules,
   };
 }
 

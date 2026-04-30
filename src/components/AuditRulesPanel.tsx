@@ -1,11 +1,13 @@
 // AuditRulesPanel.tsx — Collapsible ⚙️ Audit Rules configuration panel.
-// Opens from gear icon in the header. Six editable sections, each with
+// Opens from gear icon in the header. Eight editable sections, each with
 // its own Save and Reset to Default. Changes are not auto-saved.
 // Unsaved edits show a yellow dot on the section header.
 
 import { useState, useCallback } from 'react';
 import {
   type AuditRules,
+  type CustomRule,
+  type RuleType,
   DEFAULT_RULES,
   getAuditRules,
   saveRulesSection,
@@ -173,7 +175,72 @@ function MarkupRatesSection({ initial }: { initial: AuditRules['markupRates'] })
   );
 }
 
-// ── Section 2: Punch Categories ────────────────────────────────────────────────
+// ── Section 2: Hourly Rates ────────────────────────────────────────────────────
+
+function HourlyRatesSection({ initial }: { initial: AuditRules['hourlyRates'] }) {
+  const [fsmI, setFsmI] = useState(String(initial.fsmI));
+  const [fsmII, setFsmII] = useState(String(initial.fsmII));
+  const [saveState, triggerSave] = useSaveState();
+
+  const isDirty =
+    parseFloat(fsmI) !== initial.fsmI || parseFloat(fsmII) !== initial.fsmII;
+
+  function handleSave() {
+    const ok = saveRulesSection('hourlyRates', {
+      fsmI: parseFloat(fsmI) || 0,
+      fsmII: parseFloat(fsmII) || 0,
+    });
+    triggerSave(ok);
+  }
+
+  function handleReset() {
+    setFsmI(String(DEFAULT_RULES.hourlyRates.fsmI));
+    setFsmII(String(DEFAULT_RULES.hourlyRates.fsmII));
+    const ok = resetSection('hourlyRates');
+    triggerSave(ok);
+  }
+
+  return (
+    <div className="section-block">
+      <SectionHeader title="Hourly Rates" dirty={isDirty} />
+      <p className="text-[10px] text-mc-dim mb-2">
+        Expected base pay rates for FSM I and FSM II rows. Set to 0 to skip rate validation.
+        Check 01 will flag any row whose base rate does not match the configured value.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-[11px] text-mc-dim mb-1 block">FSM I Rate ($/hr)</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={fsmI}
+            onChange={(e) => setFsmI(e.target.value)}
+            className={inputCls}
+            style={inputStyle}
+            placeholder="0 = disabled"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[11px] text-mc-dim mb-1 block">FSM II Rate ($/hr)</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={fsmII}
+            onChange={(e) => setFsmII(e.target.value)}
+            className={inputCls}
+            style={inputStyle}
+            placeholder="0 = disabled"
+          />
+        </label>
+      </div>
+      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+    </div>
+  );
+}
+
+// ── Section 3: Punch Categories (was 2) ───────────────────────────────────────
 
 function PunchCategoriesSection({ initial }: { initial: AuditRules['punchCategories'] }) {
   const [supported, setSupported] = useState(tagsToString(initial.supported));
@@ -426,7 +493,243 @@ function PoNumberSection({ initial }: { initial: string }) {
   );
 }
 
-// ── Section 7: Bragi AI System Prompt ─────────────────────────────────────────
+// ── Section 8: Custom Rules (Check 15) ────────────────────────────────────────
+
+const RULE_TYPE_LABELS: Record<RuleType, string> = {
+  date_granularity: 'Date Granularity',
+  positive_hours: 'Positive Hours',
+  required_field: 'Required Field',
+};
+
+function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
+  const [rules, setRules] = useState<CustomRule[]>(initial);
+  const [saveState, triggerSave] = useSaveState();
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  // Add-form state
+  const [newName, setNewName] = useState('');
+  const [newEntryTypes, setNewEntryTypes] = useState('');
+  const [newRuleType, setNewRuleType] = useState<RuleType>('date_granularity');
+  const [newStateFilter, setNewStateFilter] = useState('');
+  const [newFieldName, setNewFieldName] = useState('');
+
+  const isDirty = JSON.stringify(rules) !== JSON.stringify(initial);
+
+  function handleToggle(id: string) {
+    setRules((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)),
+    );
+  }
+
+  function handleDelete(id: string) {
+    setRules((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  function handleAddRule() {
+    if (!newName.trim()) return;
+    const newRule: CustomRule = {
+      id: String(Date.now()),
+      name: newName.trim(),
+      enabled: true,
+      entryTypes: newEntryTypes
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      ruleType: newRuleType,
+      stateFilter: newStateFilter.trim() || undefined,
+      fieldName: newRuleType === 'required_field' ? newFieldName.trim() || undefined : undefined,
+    };
+    setRules((prev) => [...prev, newRule]);
+    // Reset form
+    setNewName('');
+    setNewEntryTypes('');
+    setNewRuleType('date_granularity');
+    setNewStateFilter('');
+    setNewFieldName('');
+    setShowAddForm(false);
+  }
+
+  function handleCancelAdd() {
+    setNewName('');
+    setNewEntryTypes('');
+    setNewRuleType('date_granularity');
+    setNewStateFilter('');
+    setNewFieldName('');
+    setShowAddForm(false);
+  }
+
+  function handleSave() {
+    const ok = saveRulesSection('customRules', rules);
+    triggerSave(ok);
+  }
+
+  function handleReset() {
+    setRules(DEFAULT_RULES.customRules);
+    const ok = resetSection('customRules');
+    triggerSave(ok);
+  }
+
+  return (
+    <div className="section-block">
+      <SectionHeader title="Custom Rules (Check 15)" dirty={isDirty} />
+      <p className="text-[10px] text-mc-dim mb-3">
+        Define no-code audit constraints. Each enabled rule runs against FSM I + FSM II rows
+        in Check 15. Entry types are matched against the Comments column (case-insensitive).
+      </p>
+
+      {/* Rules table */}
+      {rules.length > 0 ? (
+        <div className="space-y-2 mb-3">
+          {rules.map((rule) => (
+            <div
+              key={rule.id}
+              className="rounded-md px-3 py-2 text-xs flex items-start gap-2"
+              style={{ backgroundColor: 'rgba(7, 9, 15, 0.85)', border: '1px solid var(--mc-card-border)' }}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-mc-text truncate">{rule.name}</span>
+                  <span className="text-mc-dim text-[10px]">{RULE_TYPE_LABELS[rule.ruleType]}</span>
+                  {rule.stateFilter && (
+                    <span className="text-mc-amber text-[10px]">State: {rule.stateFilter}</span>
+                  )}
+                </div>
+                {rule.entryTypes.length > 0 && (
+                  <div className="text-mc-dim text-[10px] mt-0.5">
+                    Applies to: {rule.entryTypes.join(', ')}
+                  </div>
+                )}
+                {rule.ruleType === 'required_field' && rule.fieldName && (
+                  <div className="text-mc-dim text-[10px]">Field: {rule.fieldName}</div>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Enabled toggle */}
+                <button
+                  type="button"
+                  onClick={() => handleToggle(rule.id)}
+                  className={`text-[10px] px-2 py-0.5 rounded font-semibold transition ${
+                    rule.enabled
+                      ? 'bg-mc-green/20 text-mc-green border border-mc-green/30'
+                      : 'bg-mc-dim/10 text-mc-dim border border-mc-card-border'
+                  }`}
+                  title={rule.enabled ? 'Click to disable' : 'Click to enable'}
+                >
+                  {rule.enabled ? 'ON' : 'OFF'}
+                </button>
+                {/* Delete */}
+                <button
+                  type="button"
+                  onClick={() => handleDelete(rule.id)}
+                  className="text-rose-400/60 hover:text-rose-400 text-[10px] px-1"
+                  title="Delete rule"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-mc-dim italic mb-3">No custom rules defined yet.</p>
+      )}
+
+      {/* Add rule form */}
+      {showAddForm ? (
+        <div
+          className="rounded-md px-3 py-3 mb-3 space-y-2"
+          style={{ backgroundColor: 'rgba(7, 9, 15, 0.85)', border: '1px solid var(--mc-card-border)' }}
+        >
+          <p className="text-[10px] font-bold uppercase tracking-widest text-mc-dim mb-2">New Rule</p>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">Name</span>
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="e.g. CA OT Date Granularity"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">Entry Types (comma-separated, matches Comments column)</span>
+            <input
+              type="text"
+              value={newEntryTypes}
+              onChange={(e) => setNewEntryTypes(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="Over Time, Time Off"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">Rule Type</span>
+            <select
+              value={newRuleType}
+              onChange={(e) => setNewRuleType(e.target.value as RuleType)}
+              className={inputCls}
+              style={inputStyle}
+            >
+              <option value="date_granularity">Date Granularity — visitDate must be a specific day (non-null)</option>
+              <option value="positive_hours">Positive Hours — time hours must be &gt; 0</option>
+              <option value="required_field">Required Field — a named field must be non-empty</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">State Filter (optional — substring match on Comments)</span>
+            <input
+              type="text"
+              value={newStateFilter}
+              onChange={(e) => setNewStateFilter(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="e.g. CA"
+            />
+          </label>
+          {newRuleType === 'required_field' && (
+            <label className="block">
+              <span className="text-[11px] text-mc-dim mb-1 block">Field Name (LaborRow property to check)</span>
+              <input
+                type="text"
+                value={newFieldName}
+                onChange={(e) => setNewFieldName(e.target.value)}
+                className={inputCls}
+                style={inputStyle}
+                placeholder="e.g. comments, associateId, visitDate"
+              />
+            </label>
+          )}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              className={btnSave}
+              onClick={handleAddRule}
+              disabled={!newName.trim()}
+            >
+              Save Rule
+            </button>
+            <button type="button" className={btnReset} onClick={handleCancelAdd}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowAddForm(true)}
+          className="text-xs text-mc-blue hover:text-[#2a8aee] font-medium mb-3 transition"
+        >
+          + Add Rule
+        </button>
+      )}
+
+      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+    </div>
+  );
+}
+
+// ── Section 9: Bragi AI System Prompt ─────────────────────────────────────────
 
 function BragiPromptSection({ initial }: { initial: string }) {
   const [value, setValue] = useState(initial);
@@ -510,11 +813,13 @@ export function AuditRulesPanel({ onClose }: { onClose: () => void }) {
       {/* Scrollable sections */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
         <MarkupRatesSection initial={rules.markupRates} />
+        <HourlyRatesSection initial={rules.hourlyRates} />
         <PunchCategoriesSection initial={rules.punchCategories} />
         <OtThresholdSection initial={rules.otThreshold} />
         <ToleranceSection initial={rules.tolerances} />
         <InvoiceTabsSection initial={rules.invoiceTabs} />
         <PoNumberSection initial={rules.poNumber} />
+        <CustomRulesSection initial={rules.customRules} />
         <BragiPromptSection initial={rules.bragiSystemPrompt} />
 
         {/* Reset all */}

@@ -17,6 +17,7 @@ import { check11DateRange } from './checks/check11_dateRange';
 import { check12TimeOff } from './checks/check12_timeOff';
 import { check13PoNumber } from './checks/check13_poNumber';
 import { check14TermedPto } from './checks/check14_termedPto';
+import { check15CustomRules } from './checks/check15_customRules';
 import { getAuditRules } from './auditRules';
 
 function fmtDate(d: Date): string {
@@ -57,6 +58,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check12TimeOff(parsed.fsmIRows, parsed.fsmIIRows, parsed.timeOffRows),
     check13PoNumber(parsed.e17Value, rules.poNumber),
     check14TermedPto(parsed.fsmIRows, parsed.fsmIIRows, parsed.mgmtRows, parsed.termedPtoRows),
+    check15CustomRules(parsed.fsmIRows, parsed.fsmIIRows),
   ];
 
   const period = parsed.declaredPeriod

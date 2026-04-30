@@ -2,6 +2,7 @@
 // FT: Markup = Base × rules.markupRates.ft | PT: Markup = Base × rules.markupRates.pt | else: 0
 // Loaded Rate = Base + Markup; Total Bill = Loaded Rate × Time Hours
 // Tolerance ≤ rules.tolerances.dollar per row
+// If hourlyRates.fsmI/fsmII are set (> 0), also validates base pay rate against expected rate.
 
 import type { CheckResult, LaborRow } from '../types';
 import { fmtMoney } from '../../lib/num';
@@ -12,6 +13,8 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
   const dollarTol = rules.tolerances.dollar;
   const ftRate = rules.markupRates.ft;
   const ptRate = rules.markupRates.pt;
+  const expectedRateI  = rules.hourlyRates.fsmI;
+  const expectedRateII = rules.hourlyRates.fsmII;
 
   const all = [...fsmI, ...fsmII];
   const failures: Record<string, unknown>[] = [];
@@ -30,8 +33,14 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
     const billOk = Math.abs(bill - r.billValue) <= dollarTol;
     const muOk   = Math.abs(mu - r.muValue)     <= dollarTol;
 
-    if (!billOk || !muOk) {
-      failures.push({
+    // Hourly rate validation — only when configured (> 0) and row has a non-zero base rate
+    const expectedRate = r.sheet === 'FSM I' ? expectedRateI : expectedRateII;
+    const rateOk = expectedRate === 0 || r.basePayRate === 0
+      ? true
+      : Math.abs(r.basePayRate - expectedRate) <= dollarTol;
+
+    if (!billOk || !muOk || !rateOk) {
+      const entry: Record<string, unknown> = {
         sheet: r.sheet,
         row: r.rowNum,
         name: r.employeeName,
@@ -43,7 +52,12 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
         expectedBill: fmtMoney(bill),
         actualBill: fmtMoney(r.billValue),
         deltaBill: fmtMoney(r.billValue - bill),
-      });
+      };
+      if (!rateOk) {
+        entry.expectedBaseRate = fmtMoney(expectedRate);
+        entry.rateIssue = `Base rate ${fmtMoney(r.basePayRate)} does not match configured ${r.sheet} rate ${fmtMoney(expectedRate)}`;
+      }
+      failures.push(entry);
     }
   }
 
