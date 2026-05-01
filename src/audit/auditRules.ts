@@ -83,7 +83,34 @@ export const DEFAULT_RULES: AuditRules = {
     'Root Cause, Rows of Concern, Recommended Action.',
 };
 
+export const DEFAULT_SES_RULES: AuditRules = {
+  markupRates: { ft: 0.2993, pt: 0.2770 },
+  hourlyRates: { fsmI: 0, fsmII: 0 },
+  punchCategories: {
+    supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
+    exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Over Time'],
+  },
+  otThreshold: 3.99,
+  tolerances: { dollar: 0.01, hours: 0.01 },
+  invoiceTabs: {
+    toLoad: ['Detail', 'Management Detail Hours', 'Cloud Services', 'Invoice Summary'],
+    alwaysExclude: ['SOW'],
+  },
+  poNumber: 'T26C31H000163',
+  customRules: [],
+  bragiSystemPrompt: DEFAULT_RULES.bragiSystemPrompt,
+};
+
 const STORAGE_KEY = 'fsm-audit-rules';
+const SES_STORAGE_KEY = 'ses-audit-rules';
+
+function storageKey(program?: 'fsm' | 'ses'): string {
+  return program === 'ses' ? SES_STORAGE_KEY : STORAGE_KEY;
+}
+
+function defaultRules(program?: 'fsm' | 'ses'): AuditRules {
+  return program === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
+}
 
 function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRules {
   return {
@@ -106,24 +133,26 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
 }
 
 /** Read rules from storage. If not found, seed defaults and return them. */
-export function getAuditRules(): AuditRules {
+export function getAuditRules(program?: 'fsm' | 'ses'): AuditRules {
+  const key = storageKey(program);
+  const defs = defaultRules(program);
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      writeAuditRules(DEFAULT_RULES);
-      return DEFAULT_RULES;
+      writeAuditRules(defs, program);
+      return defs;
     }
     const parsed = JSON.parse(raw) as Partial<AuditRules>;
-    return deepMerge(DEFAULT_RULES, parsed);
+    return deepMerge(defs, parsed);
   } catch {
-    return DEFAULT_RULES;
+    return defs;
   }
 }
 
 /** Persist a full rules object to storage. Returns true on success. */
-export function writeAuditRules(rules: AuditRules): boolean {
+export function writeAuditRules(rules: AuditRules, program?: 'fsm' | 'ses'): boolean {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(rules));
+    localStorage.setItem(storageKey(program), JSON.stringify(rules));
     return true;
   } catch {
     return false;
@@ -134,19 +163,20 @@ export function writeAuditRules(rules: AuditRules): boolean {
 export function saveRulesSection<K extends keyof AuditRules>(
   section: K,
   value: AuditRules[K],
+  program?: 'fsm' | 'ses',
 ): boolean {
   try {
-    const current = getAuditRules();
+    const current = getAuditRules(program);
     const next = { ...current, [section]: value };
-    return writeAuditRules(next);
+    return writeAuditRules(next, program);
   } catch {
     return false;
   }
 }
 
 /** Reset a single section to factory defaults. */
-export function resetSection<K extends keyof AuditRules>(section: K): boolean {
-  return saveRulesSection(section, DEFAULT_RULES[section]);
+export function resetSection<K extends keyof AuditRules>(section: K, program?: 'fsm' | 'ses'): boolean {
+  return saveRulesSection(section, defaultRules(program)[section], program);
 }
 
 /** Reset all rules to factory defaults. */

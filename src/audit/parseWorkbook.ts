@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import type {
   CloudRow, LaborRow, MgmtRow, OtApprovalRow,
-  ParsedData, PunchRow, RosterEntry, TermedPtoRow, TieOutData, TimeOffRow,
+  ParsedData, PunchRow, RosterEntry, SesPunchRow, ShiftRow, TermedPtoRow, TieOutData, TimeOffRow,
 } from './types';
 import { toNum, toStr, toPct } from '../lib/num';
 
@@ -112,6 +112,7 @@ function parseLaborSheet(label: string, ws: XLSX.WorkSheet): LaborRow[] {
   const cBill  = col('bill');
   const cState = col('associate state');
   const cCmt   = col('comments');
+  const cStoreId = col('client store id');
 
   const out: LaborRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
@@ -142,6 +143,7 @@ function parseLaborSheet(label: string, ws: XLSX.WorkSheet): LaborRow[] {
       comments:       toStr(row[cCmt]),
       visitDate:      toDate(row[cDate]),
       week: cWeek >= 0 && row[cWeek] != null ? (toNum(row[cWeek]) || null) : null,
+      clientStoreId: cStoreId >= 0 ? toStr(row[cStoreId]) : '',
     });
   }
   return out;
@@ -753,5 +755,257 @@ export async function parseInvoice(
     timeOffRows: [],
     timeOffFileNames: [],
     termedPtoRows: [],
+    shiftRows: [],
+    sesPunchRows: [],
+  };
+}
+
+// ── SES punch XLSX parser ─────────────────────────────────────────────────────
+// Columns: Employee Name, Associate ID, Time Hours, Payroll Tag
+
+export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
+  const buf = await readBuf(file);
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  } catch {
+    return [];
+  }
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return [];
+
+  const aoa = readAoA(ws);
+  if (aoa.length < 2) return [];
+
+  // Find header row
+  let hIdx = -1;
+  for (let i = 0; i < Math.min(5, aoa.length); i++) {
+    const row = aoa[i] || [];
+    if (row.some((c) => toStr(c).toLowerCase().includes('employee name') || toStr(c).toLowerCase().includes('associate id'))) {
+      hIdx = i; break;
+    }
+  }
+  if (hIdx < 0) return [];
+
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const col = (name: string) => headers.indexOf(name.toLowerCase());
+
+  const cName    = col('employee name') >= 0 ? col('employee name') : col('associate name');
+  const cId      = col('associate id');
+  const cHrs     = col('time hours');
+  const cTag     = col('payroll tag');
+
+  const out: SesPunchRow[] = [];
+  for (let i = hIdx + 1; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.every((v) => v == null || v === '')) continue;
+    const name = toStr(row[cName]);
+    if (!name) continue;
+    out.push({
+      rowNum: i + 1,
+      employeeName: name,
+      associateId: cId >= 0 ? toStr(row[cId]) : '',
+      timeHours: cHrs >= 0 ? toNum(row[cHrs]) : 0,
+      payrollTag: cTag >= 0 ? toStr(row[cTag]) : undefined,
+    });
+  }
+  return out;
+}
+
+// ── Shift report XLSX parser ──────────────────────────────────────────────────
+// Columns: Associate ID, Employee Name, Actual Time (minutes or HH:MM)
+
+export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
+  const buf = await readBuf(file);
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  } catch {
+    return [];
+  }
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return [];
+
+  const aoa = readAoA(ws);
+  if (aoa.length < 2) return [];
+
+  // Find header row
+  let hIdx = -1;
+  for (let i = 0; i < Math.min(5, aoa.length); i++) {
+    const row = aoa[i] || [];
+    if (row.some((c) => toStr(c).toLowerCase().includes('associate id') || toStr(c).toLowerCase().includes('actual'))) {
+      hIdx = i; break;
+    }
+  }
+  if (hIdx < 0) return [];
+
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const col = (name: string) => headers.indexOf(name.toLowerCase());
+
+  const cId      = col('associate id');
+  const cName    = col('employee name') >= 0 ? col('employee name') : col('associate name');
+  // "Actual Time" column — may be in minutes (numeric) or HH:MM string
+  const cActual  = headers.findIndex((h) => h.includes('actual'));
+
+  const out: ShiftRow[] = [];
+  for (let i = hIdx + 1; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.every((v) => v == null || v === '')) continue;
+    const id = cId >= 0 ? toStr(row[cId]) : '';
+    if (!id) continue;
+
+    let actualMinutes = 0;
+    if (cActual >= 0 && row[cActual] != null) {
+      const raw = row[cActual];
+      if (typeof raw === 'number') {
+        // If value looks like minutes (> 24) treat as minutes, else treat as hours * 60
+        actualMinutes = raw > 24 ? raw : raw * 60;
+      } else {
+        const s = toStr(raw);
+        // HH:MM format
+        const m = s.match(/^(\d+):(\d{2})$/);
+        if (m) {
+          actualMinutes = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        } else {
+          const n = parseFloat(s);
+          if (!isNaN(n)) actualMinutes = n > 24 ? n : n * 60;
+        }
+      }
+    }
+
+    out.push({
+      rowNum: i + 1,
+      associateId: id,
+      employeeName: cName >= 0 ? toStr(row[cName]) : '',
+      actualMinutes,
+    });
+  }
+  return out;
+}
+
+// ── SES invoice parser ────────────────────────────────────────────────────────
+
+export async function parseSesInvoice(
+  invoiceFile: File,
+  punchFile: File | null,
+  shiftFile1: File | null,
+  shiftFile2: File | null,
+): Promise<ParsedData> {
+  const buf = await readBuf(invoiceFile);
+
+  let wb: XLSX.WorkBook;
+  let formulasParsed = true;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: true, cellDates: false });
+  } catch {
+    formulasParsed = false;
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  }
+
+  // Cover tab metadata
+  let invoiceNumber: string | null = null;
+  let periodRange: string | null = null;
+  let e17Value: string | null = null;
+  let invoiceTotalRaw: number | null = null;
+  try {
+    const metaWb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false, sheetRows: 25 });
+    const meta = readFirstTabMeta(metaWb);
+    invoiceNumber   = meta.invoiceNumber;
+    periodRange     = meta.periodRange;
+    e17Value        = meta.e17Value;
+    invoiceTotalRaw = meta.invoiceTotalRaw;
+  } catch {
+    // non-fatal
+  }
+
+  // SES Detail tab is the labor data — try common name variants
+  const detail  = findSheet(wb, ['Detail', 'SES Detail', 'FSM I', 'Labor Detail']);
+  const mgmt    = findSheet(wb, ['Management Detail Hours', 'Management']);
+  const cloud   = findSheet(wb, ['Cloud Services', 'Cloud']);
+  const invSum  = findSheet(wb, ['Invoice Summary', 'Tie-Out', 'Invoice Schedule']);
+
+  // SES uses a single Detail sheet mapped as fsmIRows
+  const fsmIRows  = detail ? parseLaborSheet('FSM I', detail.ws) : [];
+  const fsmIIRows: LaborRow[] = [];
+  const mgmtRows  = mgmt  ? parseMgmtSheet(mgmt.ws)   : [];
+  const cloudRows = cloud ? parseCloudSheet(cloud.ws)  : [];
+
+  // SES punch — XLSX file (not CSV)
+  let sesPunchRows: SesPunchRow[] = [];
+  let punchFileName: string | null = null;
+  if (punchFile) {
+    sesPunchRows = await parseSesPunchXlsx(punchFile);
+    punchFileName = punchFile.name;
+  }
+
+  // Shift reports (up to 2 weeks)
+  let shiftRows: ShiftRow[] = [];
+  for (const f of [shiftFile1, shiftFile2].filter(Boolean) as File[]) {
+    const rows = await parseShiftReport(f);
+    shiftRows = [...shiftRows, ...rows];
+  }
+
+  const fsmITotal   = Math.round(fsmIRows.reduce((s, r)  => s + r.billValue, 0) * 100) / 100;
+  const fsmIITotal  = 0;
+  const mgmtTotal   = Math.round(mgmtRows.reduce((s, r)  => s + r.totalBill, 0) * 100) / 100;
+  const cloudTotal  = Math.round(cloudRows.reduce((s, r)  => s + r.amount,   0) * 100) / 100;
+
+  const tieOutData = invSum
+    ? parseInvoiceSummary(invSum.ws, fsmITotal, fsmIITotal, mgmtTotal, cloudTotal)
+    : { fsmITotal, fsmIITotal, mgmtTotal, cloudTotal, invoiceTotal: null, extraLineItems: [] };
+
+  if (invoiceTotalRaw !== null) {
+    tieOutData.invoiceTotal = Math.round(invoiceTotalRaw * 100) / 100;
+  }
+
+  let declaredPeriod: { start: Date; end: Date } | null = null;
+  if (periodRange) {
+    const m = periodRange.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})\s*[-–—]\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+    if (m) {
+      const s = new Date(m[1]);
+      const e = new Date(m[2]);
+      if (!isNaN(s.getTime()) && !isNaN(e.getTime())) declaredPeriod = { start: s, end: e };
+    }
+  }
+  if (!declaredPeriod) declaredPeriod = parseDeclaredPeriod(wb);
+
+  const weekSet = new Set<number>();
+  for (const r of fsmIRows) {
+    if (r.week != null && r.week > 0) weekSet.add(r.week);
+  }
+  const weeksCovered = Array.from(weekSet).sort((a, b) => a - b);
+
+  const crossTabNotes: string[] = [];
+  if (!formulasParsed) crossTabNotes.push('Formula extraction skipped — Check 2 MU/Bill formula verification will use values only.');
+  if (!detail) crossTabNotes.push('Detail tab not found in workbook.');
+  if (!invSum) crossTabNotes.push('Invoice Summary tab not found — tie-out check will use reconstructed totals only.');
+  if (!punchFileName) crossTabNotes.push('No SES punch file uploaded — punch checks will be skipped.');
+  if (!shiftFile1) crossTabNotes.push('No shift report uploaded — three-way recon will compare invoice vs punch only.');
+  crossTabNotes.push(
+    `Labor rows: ${fsmIRows.length}. Punch rows: ${sesPunchRows.length}. Shift rows: ${shiftRows.length}.`,
+  );
+
+  return {
+    fileName: invoiceFile.name,
+    invoiceNumber,
+    e17Value,
+    punchFileName,
+    fsmIRows,
+    fsmIIRows,
+    punchRows: [],
+    mgmtRows,
+    cloudRows,
+    rosterEntries: [],
+    otApprovalRows: [],
+    tieOutData,
+    declaredPeriod,
+    weeksCovered,
+    crossTabNotes,
+    tabNames: wb.SheetNames,
+    timeOffRows: [],
+    timeOffFileNames: [],
+    termedPtoRows: [],
+    shiftRows,
+    sesPunchRows,
   };
 }

@@ -27,6 +27,7 @@ export interface LaborRow {
   comments: string;
   visitDate: Date | null;
   week: number | null;
+  clientStoreId: string;
 }
 
 export interface PunchRow {
@@ -67,6 +68,21 @@ export interface CloudRow {
 export interface RosterEntry {
   name: string;
   associateId: string;
+}
+
+export interface ShiftRow {
+  rowNum: number;
+  associateId: string;
+  employeeName: string;
+  actualMinutes: number;
+}
+
+export interface SesPunchRow {
+  rowNum: number;
+  employeeName: string;
+  associateId: string;
+  timeHours: number;
+  payrollTag?: string;
 }
 
 export interface OtApprovalRow {
@@ -132,6 +148,8 @@ export interface ParsedData {
   timeOffRows: TimeOffRow[];
   timeOffFileNames: string[];
   termedPtoRows: TermedPtoRow[];
+  shiftRows: ShiftRow[];
+  sesPunchRows: SesPunchRow[];
 }
 
 export type AppState = 'idle' | 'parsing' | 'auditing' | 'done' | 'error';
