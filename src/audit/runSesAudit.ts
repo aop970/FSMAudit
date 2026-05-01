@@ -76,7 +76,7 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
   };
 
   const results: CheckResult[] = [
-    check01Labor(parsed.fsmIRows, parsed.fsmIIRows),
+    check01Labor(parsed.fsmIRows, parsed.fsmIIRows, 'ses'),
     check02Formulas(parsed.fsmIRows, parsed.fsmIIRows),
     check03SesThreeWayRecon(parsed.fsmIRows, parsed.sesPunchRows, parsed.shiftRows),
     check04PunchIntegrity(parsed.punchRows),

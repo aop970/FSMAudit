@@ -8,8 +8,8 @@ import type { CheckResult, LaborRow } from '../types';
 import { fmtMoney } from '../../lib/num';
 import { getAuditRules } from '../auditRules';
 
-export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
-  const rules = getAuditRules();
+export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm' | 'ses'): CheckResult {
+  const rules = getAuditRules(program);
   const dollarTol = rules.tolerances.dollar;
   const ftRate = rules.markupRates.ft;
   const ptRate = rules.markupRates.pt;
@@ -22,11 +22,14 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
   for (const r of all) {
     if (r.timeHours === 0 && r.basePayRate === 0) continue;
     const type = r.associateType.toUpperCase().trim();
-    const mu = type === 'FT'
+    // Round MU to 2dp — invoices compute markup as ROUND(base × rate, 2) before multiplying by hours.
+    // Using unrounded MU causes compounding deltas (e.g. 8h × $0.005 rounding = $0.04 bill delta).
+    const muRaw = type === 'FT'
       ? r.basePayRate * ftRate
       : type === 'PT'
         ? r.basePayRate * ptRate
         : 0;
+    const mu   = Math.round(muRaw * 100) / 100;
     const loaded = r.basePayRate + mu;
     const bill   = loaded * r.timeHours;
 
