@@ -761,7 +761,6 @@ export async function parseInvoice(
 }
 
 // ── SES punch XLSX parser ─────────────────────────────────────────────────────
-// Columns: Employee Name, Associate ID, Time Hours, Payroll Tag
 
 export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
   const buf = await readBuf(file);
@@ -777,43 +776,54 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
   const aoa = readAoA(ws);
   if (aoa.length < 2) return [];
 
-  // Find header row
-  let hIdx = -1;
-  for (let i = 0; i < Math.min(5, aoa.length); i++) {
+  // Find header row — search first 10 rows, any row with a name/id/hours/tag header word
+  let hIdx = 0; // fall back to row 0 if nothing better found
+  for (let i = 0; i < Math.min(10, aoa.length); i++) {
     const row = aoa[i] || [];
-    if (row.some((c) => toStr(c).toLowerCase().includes('employee name') || toStr(c).toLowerCase().includes('associate id'))) {
+    const vals = row.map((c) => toStr(c).toLowerCase());
+    if (vals.some((v) => v.includes('name') || v.includes('associate') || v.includes('employee') || v.includes('hours') || v.includes('payroll'))) {
       hIdx = i; break;
     }
   }
-  if (hIdx < 0) return [];
 
   const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
-  const col = (name: string) => headers.indexOf(name.toLowerCase());
+  // Flexible column finder — first exact then partial match against a list of aliases
+  function findCol(...aliases: string[]): number {
+    for (const a of aliases) {
+      const exact = headers.indexOf(a);
+      if (exact >= 0) return exact;
+    }
+    for (const a of aliases) {
+      const partial = headers.findIndex((h) => h.includes(a));
+      if (partial >= 0) return partial;
+    }
+    return -1;
+  }
 
-  const cName    = col('employee name') >= 0 ? col('employee name') : col('associate name');
-  const cId      = col('associate id');
-  const cHrs     = col('time hours');
-  const cTag     = col('payroll tag');
+  const cName = findCol('employee name', 'associate name', 'worker name', 'name');
+  const cId   = findCol('associate id', 'employee id', 'worker id', 'id');
+  const cHrs  = findCol('time hours', 'total hours', 'hours', 'duration');
+  const cTag  = findCol('payroll tag', 'tag');
 
   const out: SesPunchRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
     if (row.every((v) => v == null || v === '')) continue;
-    const name = toStr(row[cName]);
-    if (!name) continue;
+    const name = cName >= 0 ? toStr(row[cName]) : '';
+    const id   = cId   >= 0 ? toStr(row[cId])   : '';
+    if (!name && !id) continue;
     out.push({
       rowNum: i + 1,
       employeeName: name,
-      associateId: cId >= 0 ? toStr(row[cId]) : '',
+      associateId: id,
       timeHours: cHrs >= 0 ? toNum(row[cHrs]) : 0,
-      payrollTag: cTag >= 0 ? toStr(row[cTag]) : undefined,
+      payrollTag: cTag >= 0 ? toStr(row[cTag]) || undefined : undefined,
     });
   }
   return out;
 }
 
 // ── Shift report XLSX parser ──────────────────────────────────────────────────
-// Columns: Associate ID, Employee Name, Actual Time (minutes or HH:MM)
 
 export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
   const buf = await readBuf(file);
@@ -829,43 +839,53 @@ export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
   const aoa = readAoA(ws);
   if (aoa.length < 2) return [];
 
-  // Find header row
-  let hIdx = -1;
-  for (let i = 0; i < Math.min(5, aoa.length); i++) {
+  // Find header row — search first 10 rows
+  let hIdx = 0;
+  for (let i = 0; i < Math.min(10, aoa.length); i++) {
     const row = aoa[i] || [];
-    if (row.some((c) => toStr(c).toLowerCase().includes('associate id') || toStr(c).toLowerCase().includes('actual'))) {
+    const vals = row.map((c) => toStr(c).toLowerCase());
+    if (vals.some((v) => v.includes('name') || v.includes('associate') || v.includes('employee') || v.includes('actual') || v.includes('minute') || v.includes('hours'))) {
       hIdx = i; break;
     }
   }
-  if (hIdx < 0) return [];
 
   const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
-  const col = (name: string) => headers.indexOf(name.toLowerCase());
+  function findCol(...aliases: string[]): number {
+    for (const a of aliases) {
+      const exact = headers.indexOf(a);
+      if (exact >= 0) return exact;
+    }
+    for (const a of aliases) {
+      const partial = headers.findIndex((h) => h.includes(a));
+      if (partial >= 0) return partial;
+    }
+    return -1;
+  }
 
-  const cId      = col('associate id');
-  const cName    = col('employee name') >= 0 ? col('employee name') : col('associate name');
-  // "Actual Time" column — may be in minutes (numeric) or HH:MM string
-  const cActual  = headers.findIndex((h) => h.includes('actual'));
+  const cId     = findCol('associate id', 'employee id', 'worker id', 'id');
+  const cName   = findCol('employee name', 'associate name', 'worker name', 'name');
+  // Actual time column — could be "Actual Time", "Actual Minutes", "Total Minutes", "Duration", "Actual"
+  const cActual = findCol('actual time', 'actual minutes', 'total minutes', 'duration', 'actual', 'time', 'hours');
 
   const out: ShiftRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
     if (row.every((v) => v == null || v === '')) continue;
     const id = cId >= 0 ? toStr(row[cId]) : '';
-    if (!id) continue;
+    const name = cName >= 0 ? toStr(row[cName]) : '';
+    if (!id && !name) continue;
 
     let actualMinutes = 0;
     if (cActual >= 0 && row[cActual] != null) {
       const raw = row[cActual];
       if (typeof raw === 'number') {
-        // If value looks like minutes (> 24) treat as minutes, else treat as hours * 60
+        // Values > 24 are already minutes; ≤ 24 are hours — convert to minutes
         actualMinutes = raw > 24 ? raw : raw * 60;
       } else {
         const s = toStr(raw);
-        // HH:MM format
-        const m = s.match(/^(\d+):(\d{2})$/);
-        if (m) {
-          actualMinutes = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        const hmMatch = s.match(/^(\d+):(\d{2})(?::\d{2})?$/);
+        if (hmMatch) {
+          actualMinutes = parseInt(hmMatch[1], 10) * 60 + parseInt(hmMatch[2], 10);
         } else {
           const n = parseFloat(s);
           if (!isNaN(n)) actualMinutes = n > 24 ? n : n * 60;
@@ -876,7 +896,7 @@ export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
     out.push({
       rowNum: i + 1,
       associateId: id,
-      employeeName: cName >= 0 ? toStr(row[cName]) : '',
+      employeeName: name,
       actualMinutes,
     });
   }
