@@ -3,7 +3,6 @@
 
 import type { AuditPayload, CheckResult, ControlTableEntry, ParsedData } from './types';
 import { buildSesControlMap } from './sesControlTable';
-import { check01Labor } from './checks/check01_labor';
 import { check02Formulas } from './checks/check02_formulas';
 import { check03SesThreeWayRecon } from './checks/check03_ses_threeWayRecon';
 import { check04PunchIntegrity } from './checks/check04_punchIntegrity';
