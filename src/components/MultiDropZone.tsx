@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { Upload, FileCheck, X } from 'lucide-react';
 
 type FileRole = 'invoice' | 'punch' | 'timeOff' | 'termedPto' | 'reference' | 'shift' | 'unknown';
@@ -13,22 +13,15 @@ function classifyFile(name: string): FileRole {
   return 'unknown';
 }
 
-const ROLE_STYLE: Record<FileRole, { bg: string; text: string; label: string }> = {
-  invoice:   { bg: 'color-mix(in srgb, var(--mc-blue) 15%, transparent)',  text: 'var(--mc-blue)',  label: 'Invoice'       },
-  punch:     { bg: 'rgba(34,208,107,0.15)',   text: '#22d06b',  label: 'Punch Detail'  },
-  timeOff:   { bg: 'rgba(255,186,8,0.15)',    text: '#ffba08',  label: 'Time Off'      },
-  termedPto: { bg: 'rgba(192,132,252,0.15)',  text: '#c084fc',  label: 'Termed PTO'    },
-  reference: { bg: 'rgba(148,163,184,0.15)',  text: '#94a3b8',  label: 'Reference'     },
-  shift:     { bg: 'rgba(192,132,252,0.15)',  text: '#c084fc',  label: 'Shift Report'  },
-  unknown:   { bg: 'rgba(248,113,113,0.15)',  text: '#f87171',  label: 'Unrecognized'  },
+const ROLE_STYLE: Record<FileRole, { bg: string; text: string }> = {
+  invoice:   { bg: 'color-mix(in srgb, var(--mc-blue) 15%, transparent)', text: 'var(--mc-blue)'  },
+  punch:     { bg: 'rgba(34,208,107,0.15)',  text: '#22d06b' },
+  timeOff:   { bg: 'rgba(255,186,8,0.15)',   text: '#ffba08' },
+  termedPto: { bg: 'rgba(192,132,252,0.15)', text: '#c084fc' },
+  reference: { bg: 'rgba(148,163,184,0.15)', text: '#94a3b8' },
+  shift:     { bg: 'rgba(192,132,252,0.15)', text: '#c084fc' },
+  unknown:   { bg: 'rgba(248,113,113,0.15)', text: '#f87171' },
 };
-
-interface SlotEntry {
-  file: File;
-  role: FileRole;
-  slotLabel: string;
-  onRemove: () => void;
-}
 
 export interface MultiDropZoneProps {
   program:       'fsm' | 'ses';
@@ -50,6 +43,16 @@ export interface MultiDropZoneProps {
   onShift2:    (f: File | null) => void;
 }
 
+interface SlotDef {
+  role:       FileRole;
+  label:      string;
+  file:       File | null;
+  onFile:     (f: File | null) => void;
+  accept:     string;
+  visible:    boolean;
+  required?:  boolean;
+}
+
 export function MultiDropZone({
   program,
   invoiceFile, punchFile, timeOffFile1, timeOffFile2, termedPtoFile, refFile,
@@ -57,30 +60,30 @@ export function MultiDropZone({
   onInvoice, onPunch, onTimeOff1, onTimeOff2, onTermedPto, onRef,
   onShift1, onShift2,
 }: MultiDropZoneProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dropLog, setDropLog] = useState<string[]>([]);
+  // General multi-file drop input (drag-and-drop path)
+  const dropInputRef  = useRef<HTMLInputElement>(null);
+  // Single-slot input (individual click-to-upload path)
+  const slotInputRef  = useRef<HTMLInputElement>(null);
+  const activeHandler = useRef<(f: File | null) => void>(() => {});
 
+  // ── classify + route a batch of files (drag path) ─────────────────────────
   function processFiles(incoming: File[]) {
     const newTimeOff: File[] = [];
-    const newShift: File[] = [];
-    const log: string[] = [];
+    const newShift:   File[] = [];
 
     for (const file of incoming) {
       const role = classifyFile(file.name);
-      log.push(`${file.name} → ${role}`);
       switch (role) {
-        case 'invoice':   onInvoice(file);   break;
-        case 'punch':     onPunch(file);     break;
-        case 'timeOff':   newTimeOff.push(file); break;
-        case 'termedPto': onTermedPto(file); break;
-        case 'reference': onRef(file);       break;
-        case 'shift':     newShift.push(file); break;
-        // unknown: silently skip
+        case 'invoice':   onInvoice(file);        break;
+        case 'punch':     onPunch(file);          break;
+        case 'timeOff':   newTimeOff.push(file);  break;
+        case 'termedPto': onTermedPto(file);      break;
+        case 'reference': onRef(file);            break;
+        case 'shift':     newShift.push(file);    break;
       }
     }
 
     if (newTimeOff.length > 0) {
-      // Merge with existing time-off files, deduplicate by name, sort
       const existing = [timeOffFile1, timeOffFile2].filter(Boolean) as File[];
       const byName = new Map<string, File>();
       for (const f of [...existing, ...newTimeOff]) byName.set(f.name, f);
@@ -97,8 +100,6 @@ export function MultiDropZone({
       onShift1(sorted[0] ?? null);
       onShift2(sorted[1] ?? null);
     }
-
-    setDropLog(log);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -106,62 +107,78 @@ export function MultiDropZone({
     processFiles(Array.from(e.dataTransfer.files));
   }
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleDropInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     if (e.target.files) processFiles(Array.from(e.target.files));
     e.target.value = '';
   }
 
-  const slots: SlotEntry[] = [
-    invoiceFile   && { file: invoiceFile,   role: 'invoice'   as FileRole, slotLabel: 'Invoice',         onRemove: () => onInvoice(null)   },
-    punchFile     && { file: punchFile,     role: 'punch'     as FileRole, slotLabel: 'Punch Detail',    onRemove: () => onPunch(null)     },
-    timeOffFile1  && { file: timeOffFile1,  role: 'timeOff'   as FileRole, slotLabel: 'Time Off (Wk 1)', onRemove: () => onTimeOff1(null)  },
-    timeOffFile2  && { file: timeOffFile2,  role: 'timeOff'   as FileRole, slotLabel: 'Time Off (Wk 2)', onRemove: () => onTimeOff2(null)  },
-    termedPtoFile && { file: termedPtoFile, role: 'termedPto' as FileRole, slotLabel: 'Termed PTO',      onRemove: () => onTermedPto(null) },
-    refFile       && { file: refFile,       role: 'reference' as FileRole, slotLabel: 'Reference',        onRemove: () => onRef(null)       },
-    ...(program === 'ses' && shiftFile1 ? [{ file: shiftFile1, role: 'shift' as FileRole, slotLabel: 'Shift Rpt (Wk 1)', onRemove: () => onShift1(null) }] : []),
-    ...(program === 'ses' && shiftFile2 ? [{ file: shiftFile2, role: 'shift' as FileRole, slotLabel: 'Shift Rpt (Wk 2)', onRemove: () => onShift2(null) }] : []),
-  ].filter(Boolean) as SlotEntry[];
+  // ── individual slot click-to-upload ───────────────────────────────────────
+  function openSlot(accept: string, handler: (f: File | null) => void) {
+    activeHandler.current = handler;
+    if (slotInputRef.current) {
+      slotInputRef.current.accept = accept;
+      slotInputRef.current.value = '';
+      slotInputRef.current.click();
+    }
+  }
 
-  const hasFiles = slots.length > 0;
+  function handleSlotInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = '';
+    if (file) activeHandler.current(file);
+  }
+
+  // ── slot definitions ───────────────────────────────────────────────────────
+  const slots: SlotDef[] = [
+    {
+      role: 'invoice', label: 'Invoice', file: invoiceFile, onFile: onInvoice,
+      accept: '.xlsx,.xlsb', visible: true, required: true,
+    },
+    {
+      role: 'punch', label: 'Punch Detail', file: punchFile, onFile: onPunch,
+      accept: '.csv,.xlsx,.xlsb', visible: true,
+    },
+    {
+      role: 'timeOff', label: 'Time Off (Wk 1)', file: timeOffFile1, onFile: onTimeOff1,
+      accept: '.xlsx,.xlsb', visible: true,
+    },
+    {
+      role: 'timeOff', label: 'Time Off (Wk 2)', file: timeOffFile2, onFile: onTimeOff2,
+      accept: '.xlsx,.xlsb', visible: !!timeOffFile1,
+    },
+    {
+      role: 'termedPto', label: 'Termed PTO', file: termedPtoFile, onFile: onTermedPto,
+      accept: '.xlsx,.xlsb', visible: true,
+    },
+    ...(program === 'fsm' ? [{
+      role: 'reference' as FileRole, label: 'Reference CSV', file: refFile, onFile: onRef,
+      accept: '.csv', visible: true,
+    }] : []),
+    ...(program === 'ses' ? [
+      {
+        role: 'shift' as FileRole, label: 'Shift Report (Wk 1)', file: shiftFile1, onFile: onShift1,
+        accept: '.xlsx,.xlsb', visible: true,
+      },
+      {
+        role: 'shift' as FileRole, label: 'Shift Report (Wk 2)', file: shiftFile2, onFile: onShift2,
+        accept: '.xlsx,.xlsb', visible: !!shiftFile1,
+      },
+    ] : []),
+  ];
+
+  const visibleSlots = slots.filter((s) => s.visible);
+  const anyLoaded    = visibleSlots.some((s) => s.file);
 
   return (
     <div>
-      <div
-        className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-3 py-5 text-center transition cursor-pointer"
-        style={{
-          borderColor: hasFiles ? 'color-mix(in srgb, var(--mc-green) 35%, transparent)' : 'color-mix(in srgb, var(--mc-blue) 35%, transparent)',
-          backgroundColor: hasFiles ? 'color-mix(in srgb, var(--mc-green) 4%, transparent)' : 'color-mix(in srgb, var(--mc-bg2) 60%, transparent)',
-        }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".xlsx,.xlsb,.csv"
-          className="sr-only"
-          onChange={handleChange}
-        />
-        <Upload className="mb-1.5 h-5 w-5 text-mc-dim" />
-        <p className="text-xs font-semibold text-mc-text">Drop all files here</p>
-        <p className="text-[10px] text-mc-dim mt-0.5 leading-relaxed">
-          {program === 'ses'
-            ? 'Invoice · Punch Detail · Shift Reports · Time Off · Termed PTO'
-            : 'Invoice · Punch Detail · Time Off · Termed PTO · Reference'}
-          <br />
-          Files are auto-detected by name
-        </p>
-      </div>
-
-      {hasFiles && (
-        <div className="mt-2.5 space-y-1">
-          {slots.map((slot, i) => {
-            const style = ROLE_STYLE[slot.role];
+      {/* ── Individual slot rows (primary upload method) ── */}
+      <div className="space-y-1 mb-2">
+        {visibleSlots.map((slot) => {
+          const style = ROLE_STYLE[slot.role];
+          if (slot.file) {
             return (
               <div
-                key={i}
+                key={slot.label}
                 className="flex items-center gap-2 rounded-md px-2.5 py-1.5"
                 style={{ backgroundColor: 'color-mix(in srgb, var(--mc-bg) 50%, transparent)', border: '1px solid var(--mc-card-border)' }}
               >
@@ -174,35 +191,82 @@ export function MultiDropZone({
                   className="text-[9px] font-semibold px-1.5 py-0.5 rounded shrink-0 whitespace-nowrap"
                   style={{ backgroundColor: style.bg, color: style.text }}
                 >
-                  {slot.slotLabel}
+                  {slot.label}
                 </span>
                 <button
                   type="button"
                   className="shrink-0 text-mc-dim hover:text-rose-400 transition"
-                  onClick={(e) => { e.stopPropagation(); slot.onRemove(); }}
+                  title="Remove"
+                  onClick={() => slot.onFile(null)}
                 >
                   <X className="h-3 w-3" />
                 </button>
               </div>
             );
-          })}
-        </div>
-      )}
+          }
 
-      {dropLog.length > 0 && (
-        <div className="mt-1.5 rounded px-2 py-1.5" style={{ backgroundColor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)' }}>
-          <p className="text-[9px] font-bold uppercase tracking-widest text-mc-dim mb-1">Last drop — {dropLog.length} file{dropLog.length !== 1 ? 's' : ''} received</p>
-          {dropLog.map((line, i) => <p key={i} className="text-[9px] font-mono text-mc-dim">{line}</p>)}
-        </div>
-      )}
+          // Empty slot — clickable upload button
+          return (
+            <button
+              key={slot.label}
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition"
+              style={{
+                backgroundColor: 'transparent',
+                border: `1px dashed color-mix(in srgb, ${style.text} 25%, transparent)`,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = `color-mix(in srgb, ${style.text} 6%, transparent)`)}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              onClick={() => openSlot(slot.accept, slot.onFile)}
+            >
+              <Upload className="h-3 w-3 shrink-0" style={{ color: style.text, opacity: 0.6 }} />
+              <span className="text-[10px] font-medium flex-1" style={{ color: style.text, opacity: 0.75 }}>
+                {slot.label}
+              </span>
+              {slot.required && (
+                <span className="text-[9px] text-rose-400 font-medium shrink-0">required</span>
+              )}
+              <span className="text-[9px] text-mc-dim shrink-0">click to upload</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Hidden per-slot input */}
+      <input
+        ref={slotInputRef}
+        type="file"
+        className="sr-only"
+        onChange={handleSlotInputChange}
+      />
+
+      {/* ── General drag zone (secondary / convenience) ── */}
+      <div
+        className="flex items-center justify-center gap-2 rounded-md border border-dashed px-3 py-2 text-center transition cursor-pointer"
+        style={{
+          borderColor: anyLoaded
+            ? 'color-mix(in srgb, var(--mc-green) 30%, transparent)'
+            : 'color-mix(in srgb, var(--mc-blue) 25%, transparent)',
+          backgroundColor: 'transparent',
+        }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
+        onClick={() => dropInputRef.current?.click()}
+      >
+        <input
+          ref={dropInputRef}
+          type="file"
+          multiple
+          accept=".xlsx,.xlsb,.csv"
+          className="sr-only"
+          onChange={handleDropInputChange}
+        />
+        <Upload className="h-3.5 w-3.5 text-mc-dim shrink-0" />
+        <p className="text-[10px] text-mc-dim">or drag all files here at once</p>
+      </div>
 
       {program === 'ses' && invoiceFile && !/^Day-SES/i.test(invoiceFile.name) && (
         <p className="mt-1.5 text-[10px] text-rose-400">SES invoice name should start with Day-SES</p>
-      )}
-      {program === 'fsm' && !invoiceFile && hasFiles && (
-        <p className="mt-1.5 text-[10px] text-rose-400">
-          Invoice file required — name must start with FSM26
-        </p>
       )}
     </div>
   );

@@ -16,7 +16,11 @@ type LaborRowKey = keyof LaborRow;
 function matchesEntryType(row: LaborRow, entryTypes: string[]): boolean {
   if (entryTypes.length === 0) return true;
   const comments = row.comments.trim().toLowerCase();
-  return entryTypes.some((et) => et.trim().toLowerCase() === comments);
+  return entryTypes.some((et) => {
+    const t = et.trim().toLowerCase();
+    // Exact match first; fall back to substring so minor naming variations still hit
+    return comments === t || comments.includes(t) || t.includes(comments);
+  });
 }
 
 function matchesStateFilter(row: LaborRow, stateFilter: string | undefined): boolean {
