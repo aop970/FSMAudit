@@ -899,25 +899,16 @@ export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
     if (cActual >= 0 && row[cActual] != null) {
       const raw = row[cActual];
       if (typeof raw === 'number') {
-        if (raw > 0 && raw < 1) {
-          // Excel time fraction: fraction of 24 hours (e.g. 0.3333 = 8h)
-          actualMinutes = raw * 24 * 60;
-        } else if (raw >= 1 && raw <= 24) {
-          // Decimal hours
-          actualMinutes = raw * 60;
-        } else if (raw > 24) {
-          // Already in minutes
-          actualMinutes = raw;
-        }
+        // Column is always in minutes — use value directly
+        actualMinutes = raw > 0 ? raw : 0;
       } else {
         const s = toStr(raw).trim();
-        // HH:MM or H:MM format
         const hmMatch = s.match(/^(\d+):(\d{2})(?::\d{2})?$/);
         if (hmMatch) {
           actualMinutes = parseInt(hmMatch[1], 10) * 60 + parseInt(hmMatch[2], 10);
         } else {
           const n = parseFloat(s);
-          if (!isNaN(n)) actualMinutes = n < 1 ? n * 24 * 60 : n > 24 ? n : n * 60;
+          if (!isNaN(n) && n > 0) actualMinutes = n;
         }
       }
     }
