@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build
+RUN VITE_BASE_PATH=/ npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
