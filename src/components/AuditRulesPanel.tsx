@@ -3,17 +3,24 @@
 // its own Save and Reset to Default. Changes are not auto-saved.
 // Unsaved edits show a yellow dot on the section header.
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, createContext, useContext } from 'react';
 import {
   type AuditRules,
   type CustomRule,
   type RuleType,
   DEFAULT_RULES,
+  DEFAULT_SES_RULES,
   getAuditRules,
   saveRulesSection,
   resetSection,
   resetAllRules,
+  writeAuditRules,
 } from '../audit/auditRules';
+
+// ── Program context (avoids prop-drilling to every section) ───────────────────
+
+const ProgramCtx = createContext<'fsm' | 'ses'>('fsm');
+function useProgram() { return useContext(ProgramCtx); }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +62,7 @@ function SaveFeedback({ state }: { state: SaveState }) {
 const inputCls =
   'w-full rounded-md px-2.5 py-1.5 text-xs text-mc-text placeholder-mc-dim focus:outline-none focus:ring-1 focus:ring-mc-blue/50';
 const inputStyle = {
-  backgroundColor: 'rgba(7, 9, 15, 0.85)',
+  backgroundColor: 'color-mix(in srgb, var(--mc-bg) 85%, transparent)',
   border: '1px solid var(--mc-card-border)',
 };
 
@@ -119,6 +126,7 @@ function useSaveState(): [SaveState, (ok: boolean) => void] {
 // ── Section 1: Markup Rates ────────────────────────────────────────────────────
 
 function MarkupRatesSection({ initial }: { initial: AuditRules['markupRates'] }) {
+  const prog = useProgram();
   const [ft, setFt] = useState(String(initial.ft));
   const [pt, setPt] = useState(String(initial.pt));
   const [saveState, triggerSave] = useSaveState();
@@ -130,14 +138,14 @@ function MarkupRatesSection({ initial }: { initial: AuditRules['markupRates'] })
     const ok = saveRulesSection('markupRates', {
       ft: parseFloat(ft) || DEFAULT_RULES.markupRates.ft,
       pt: parseFloat(pt) || DEFAULT_RULES.markupRates.pt,
-    });
+    }, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
     setFt(String(DEFAULT_RULES.markupRates.ft));
     setPt(String(DEFAULT_RULES.markupRates.pt));
-    const ok = resetSection('markupRates');
+    const ok = resetSection('markupRates', prog);
     triggerSave(ok);
   }
 
@@ -177,7 +185,15 @@ function MarkupRatesSection({ initial }: { initial: AuditRules['markupRates'] })
 
 // ── Section 2: Hourly Rates ────────────────────────────────────────────────────
 
-function HourlyRatesSection({ initial }: { initial: AuditRules['hourlyRates'] }) {
+function HourlyRatesSection({
+  initial,
+  program: programProp,
+}: {
+  initial: AuditRules['hourlyRates'];
+  program: 'fsm' | 'ses';
+}) {
+  const prog = useProgram();
+  const program = programProp ?? prog;
   const [fsmI, setFsmI] = useState(String(initial.fsmI));
   const [fsmII, setFsmII] = useState(String(initial.fsmII));
   const [saveState, triggerSave] = useSaveState();
@@ -188,15 +204,16 @@ function HourlyRatesSection({ initial }: { initial: AuditRules['hourlyRates'] })
   function handleSave() {
     const ok = saveRulesSection('hourlyRates', {
       fsmI: parseFloat(fsmI) || 0,
-      fsmII: parseFloat(fsmII) || 0,
-    });
+      fsmII: program === 'ses' ? 0 : (parseFloat(fsmII) || 0),
+    }, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
-    setFsmI(String(DEFAULT_RULES.hourlyRates.fsmI));
-    setFsmII(String(DEFAULT_RULES.hourlyRates.fsmII));
-    const ok = resetSection('hourlyRates');
+    const defaults = program === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
+    setFsmI(String(defaults.hourlyRates.fsmI));
+    setFsmII(String(defaults.hourlyRates.fsmII));
+    const ok = resetSection('hourlyRates', prog);
     triggerSave(ok);
   }
 
@@ -204,12 +221,14 @@ function HourlyRatesSection({ initial }: { initial: AuditRules['hourlyRates'] })
     <div className="section-block">
       <SectionHeader title="Hourly Rates" dirty={isDirty} />
       <p className="text-[10px] text-mc-dim mb-2">
-        Expected base pay rates for FSM I and FSM II rows. Set to 0 to skip rate validation.
-        Check 01 will flag any row whose base rate does not match the configured value.
+        {program === 'ses'
+          ? 'Expected base pay rate for SES Detail rows. Set to 0 to skip rate validation.'
+          : 'Expected base pay rates for FSM I and FSM II rows. Set to 0 to skip rate validation.'}
+        {' '}Check 01 will flag any row whose base rate does not match the configured value.
       </p>
-      <div className="grid grid-cols-2 gap-3">
+      {program === 'ses' ? (
         <label className="block">
-          <span className="text-[11px] text-mc-dim mb-1 block">FSM I Rate ($/hr)</span>
+          <span className="text-[11px] text-mc-dim mb-1 block">SES $/hr</span>
           <input
             type="number"
             step="0.01"
@@ -217,24 +236,40 @@ function HourlyRatesSection({ initial }: { initial: AuditRules['hourlyRates'] })
             value={fsmI}
             onChange={(e) => setFsmI(e.target.value)}
             className={inputCls}
-            style={inputStyle}
+            style={{ ...inputStyle, maxWidth: 140 }}
             placeholder="0 = disabled"
           />
         </label>
-        <label className="block">
-          <span className="text-[11px] text-mc-dim mb-1 block">FSM II Rate ($/hr)</span>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            value={fsmII}
-            onChange={(e) => setFsmII(e.target.value)}
-            className={inputCls}
-            style={inputStyle}
-            placeholder="0 = disabled"
-          />
-        </label>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">FSM I Rate ($/hr)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={fsmI}
+              onChange={(e) => setFsmI(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="0 = disabled"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">FSM II Rate ($/hr)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={fsmII}
+              onChange={(e) => setFsmII(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="0 = disabled"
+            />
+          </label>
+        </div>
+      )}
       <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
     </div>
   );
@@ -243,6 +278,7 @@ function HourlyRatesSection({ initial }: { initial: AuditRules['hourlyRates'] })
 // ── Section 3: Punch Categories (was 2) ───────────────────────────────────────
 
 function PunchCategoriesSection({ initial }: { initial: AuditRules['punchCategories'] }) {
+  const prog = useProgram();
   const [supported, setSupported] = useState(tagsToString(initial.supported));
   const [exceptions, setExceptions] = useState(tagsToString(initial.exceptions));
   const [saveState, triggerSave] = useSaveState();
@@ -255,14 +291,14 @@ function PunchCategoriesSection({ initial }: { initial: AuditRules['punchCategor
     const ok = saveRulesSection('punchCategories', {
       supported: stringToTags(supported),
       exceptions: stringToTags(exceptions),
-    });
+    }, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
     setSupported(tagsToString(DEFAULT_RULES.punchCategories.supported));
     setExceptions(tagsToString(DEFAULT_RULES.punchCategories.exceptions));
-    const ok = resetSection('punchCategories');
+    const ok = resetSection('punchCategories', prog);
     triggerSave(ok);
   }
 
@@ -299,19 +335,20 @@ function PunchCategoriesSection({ initial }: { initial: AuditRules['punchCategor
 // ── Section 3: OT Threshold ────────────────────────────────────────────────────
 
 function OtThresholdSection({ initial }: { initial: number }) {
+  const prog = useProgram();
   const [value, setValue] = useState(String(initial));
   const [saveState, triggerSave] = useSaveState();
 
   const isDirty = parseFloat(value) !== initial;
 
   function handleSave() {
-    const ok = saveRulesSection('otThreshold', parseFloat(value) || DEFAULT_RULES.otThreshold);
+    const ok = saveRulesSection('otThreshold', parseFloat(value) || DEFAULT_RULES.otThreshold, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
     setValue(String(DEFAULT_RULES.otThreshold));
-    const ok = resetSection('otThreshold');
+    const ok = resetSection('otThreshold', prog);
     triggerSave(ok);
   }
 
@@ -338,6 +375,7 @@ function OtThresholdSection({ initial }: { initial: number }) {
 // ── Section 4: Tolerance Thresholds ───────────────────────────────────────────
 
 function ToleranceSection({ initial }: { initial: AuditRules['tolerances'] }) {
+  const prog = useProgram();
   const [dollar, setDollar] = useState(String(initial.dollar));
   const [hours, setHours] = useState(String(initial.hours));
   const [saveState, triggerSave] = useSaveState();
@@ -349,14 +387,14 @@ function ToleranceSection({ initial }: { initial: AuditRules['tolerances'] }) {
     const ok = saveRulesSection('tolerances', {
       dollar: parseFloat(dollar) || DEFAULT_RULES.tolerances.dollar,
       hours: parseFloat(hours) || DEFAULT_RULES.tolerances.hours,
-    });
+    }, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
     setDollar(String(DEFAULT_RULES.tolerances.dollar));
     setHours(String(DEFAULT_RULES.tolerances.hours));
-    const ok = resetSection('tolerances');
+    const ok = resetSection('tolerances', prog);
     triggerSave(ok);
   }
 
@@ -397,6 +435,7 @@ function ToleranceSection({ initial }: { initial: AuditRules['tolerances'] }) {
 // ── Section 5: Invoice Tab Names ───────────────────────────────────────────────
 
 function InvoiceTabsSection({ initial }: { initial: AuditRules['invoiceTabs'] }) {
+  const prog = useProgram();
   const [toLoad, setToLoad] = useState(tagsToString(initial.toLoad));
   const [alwaysExclude, setAlwaysExclude] = useState(tagsToString(initial.alwaysExclude));
   const [saveState, triggerSave] = useSaveState();
@@ -409,14 +448,15 @@ function InvoiceTabsSection({ initial }: { initial: AuditRules['invoiceTabs'] })
     const ok = saveRulesSection('invoiceTabs', {
       toLoad: stringToTags(toLoad),
       alwaysExclude: stringToTags(alwaysExclude),
-    });
+    }, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
-    setToLoad(tagsToString(DEFAULT_RULES.invoiceTabs.toLoad));
-    setAlwaysExclude(tagsToString(DEFAULT_RULES.invoiceTabs.alwaysExclude));
-    const ok = resetSection('invoiceTabs');
+    const defaults = prog === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
+    setToLoad(tagsToString(defaults.invoiceTabs.toLoad));
+    setAlwaysExclude(tagsToString(defaults.invoiceTabs.alwaysExclude));
+    const ok = resetSection('invoiceTabs', prog);
     triggerSave(ok);
   }
 
@@ -456,19 +496,22 @@ function InvoiceTabsSection({ initial }: { initial: AuditRules['invoiceTabs'] })
 // ── Section 6: PO Number ──────────────────────────────────────────────────────
 
 function PoNumberSection({ initial }: { initial: string }) {
+  const prog = useProgram();
   const [value, setValue] = useState(initial);
   const [saveState, triggerSave] = useSaveState();
 
   const isDirty = value !== initial;
 
   function handleSave() {
-    const ok = saveRulesSection('poNumber', value.trim() || DEFAULT_RULES.poNumber);
+    const defaults = prog === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
+    const ok = saveRulesSection('poNumber', value.trim() || defaults.poNumber, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
-    setValue(DEFAULT_RULES.poNumber);
-    const ok = resetSection('poNumber');
+    const defaults = prog === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
+    setValue(defaults.poNumber);
+    const ok = resetSection('poNumber', prog);
     triggerSave(ok);
   }
 
@@ -476,14 +519,16 @@ function PoNumberSection({ initial }: { initial: string }) {
     <div className="section-block">
       <SectionHeader title="PO Number" dirty={isDirty} />
       <label className="block">
-        <span className="text-[11px] text-mc-dim mb-1 block">PO# (verified against cell E17 of first tab)</span>
+        <span className="text-[11px] text-mc-dim mb-1 block">
+          PO# (verified against cell {prog === 'ses' ? 'E19' : 'E17'} of first tab)
+        </span>
         <input
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           className={inputCls}
           style={inputStyle}
-          placeholder="T26C31H000162"
+          placeholder={prog === 'ses' ? 'T26C31H000163' : 'T26C31H000162'}
           spellCheck={false}
         />
       </label>
@@ -502,6 +547,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
 };
 
 function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
+  const prog = useProgram();
   const [rules, setRules] = useState<CustomRule[]>(initial);
   const [saveState, triggerSave] = useSaveState();
   const [showAddForm, setShowAddForm] = useState(false);
@@ -516,13 +562,15 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
   const isDirty = JSON.stringify(rules) !== JSON.stringify(initial);
 
   function handleToggle(id: string) {
-    setRules((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r)),
-    );
+    const updated = rules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r));
+    setRules(updated);
+    saveRulesSection('customRules', updated, prog);
   }
 
   function handleDelete(id: string) {
-    setRules((prev) => prev.filter((r) => r.id !== id));
+    const updated = rules.filter((r) => r.id !== id);
+    setRules(updated);
+    saveRulesSection('customRules', updated, prog);
   }
 
   function handleAddRule() {
@@ -539,7 +587,9 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
       stateFilter: newStateFilter.trim() || undefined,
       fieldName: newRuleType === 'required_field' ? newFieldName.trim() || undefined : undefined,
     };
-    setRules((prev) => [...prev, newRule]);
+    const updated = [...rules, newRule];
+    setRules(updated);
+    saveRulesSection('customRules', updated, prog);
     // Reset form
     setNewName('');
     setNewEntryTypes('');
@@ -559,13 +609,13 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
   }
 
   function handleSave() {
-    const ok = saveRulesSection('customRules', rules);
+    const ok = saveRulesSection('customRules', rules, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
     setRules(DEFAULT_RULES.customRules);
-    const ok = resetSection('customRules');
+    const ok = resetSection('customRules', prog);
     triggerSave(ok);
   }
 
@@ -584,7 +634,7 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
             <div
               key={rule.id}
               className="rounded-md px-3 py-2 text-xs flex items-start gap-2"
-              style={{ backgroundColor: 'rgba(7, 9, 15, 0.85)', border: '1px solid var(--mc-card-border)' }}
+              style={{ backgroundColor: 'color-mix(in srgb, var(--mc-bg) 85%, transparent)', border: '1px solid var(--mc-card-border)' }}
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -638,7 +688,7 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
       {showAddForm ? (
         <div
           className="rounded-md px-3 py-3 mb-3 space-y-2"
-          style={{ backgroundColor: 'rgba(7, 9, 15, 0.85)', border: '1px solid var(--mc-card-border)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--mc-bg) 85%, transparent)', border: '1px solid var(--mc-card-border)' }}
         >
           <p className="text-[10px] font-bold uppercase tracking-widest text-mc-dim mb-2">New Rule</p>
           <label className="block">
@@ -732,19 +782,20 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
 // ── Section 9: Bragi AI System Prompt ─────────────────────────────────────────
 
 function BragiPromptSection({ initial }: { initial: string }) {
+  const prog = useProgram();
   const [value, setValue] = useState(initial);
   const [saveState, triggerSave] = useSaveState();
 
   const isDirty = value !== initial;
 
   function handleSave() {
-    const ok = saveRulesSection('bragiSystemPrompt', value || DEFAULT_RULES.bragiSystemPrompt);
+    const ok = saveRulesSection('bragiSystemPrompt', value || DEFAULT_RULES.bragiSystemPrompt, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
     setValue(DEFAULT_RULES.bragiSystemPrompt);
-    const ok = resetSection('bragiSystemPrompt');
+    const ok = resetSection('bragiSystemPrompt', prog);
     triggerSave(ok);
   }
 
@@ -769,13 +820,20 @@ function BragiPromptSection({ initial }: { initial: string }) {
 
 // ── AuditRulesPanel main ───────────────────────────────────────────────────────
 
-export function AuditRulesPanel({ onClose }: { onClose: () => void }) {
+export function AuditRulesPanel({
+  program = 'fsm',
+  onClose,
+}: {
+  program?: 'fsm' | 'ses';
+  onClose: () => void;
+}) {
   // Load current rules fresh on panel open
-  const [rules] = useState<AuditRules>(() => getAuditRules());
+  const [rules] = useState<AuditRules>(() => getAuditRules(program));
   const [resetAllState, triggerResetAll] = useSaveState();
 
   function handleResetAll() {
-    const ok = resetAllRules();
+    const defaults = program === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
+    const ok = program === 'ses' ? writeAuditRules(defaults, 'ses') : resetAllRules();
     triggerResetAll(ok);
     // Brief delay then close so user sees the confirm, then re-open will re-seed
     if (ok) setTimeout(() => window.location.reload(), 800);
@@ -798,7 +856,9 @@ export function AuditRulesPanel({ onClose }: { onClose: () => void }) {
       >
         <div className="flex items-center gap-2">
           <span className="text-base">⚙️</span>
-          <h2 className="text-sm font-bold text-mc-text">Audit Rules</h2>
+          <h2 className="text-sm font-bold text-mc-text">
+            Audit Rules {program === 'ses' && <span className="ml-1 text-xs font-normal text-mc-dim">(SES)</span>}
+          </h2>
         </div>
         <button
           type="button"
@@ -812,8 +872,9 @@ export function AuditRulesPanel({ onClose }: { onClose: () => void }) {
 
       {/* Scrollable sections */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <ProgramCtx.Provider value={program}>
         <MarkupRatesSection initial={rules.markupRates} />
-        <HourlyRatesSection initial={rules.hourlyRates} />
+        <HourlyRatesSection initial={rules.hourlyRates} program={program} />
         <PunchCategoriesSection initial={rules.punchCategories} />
         <OtThresholdSection initial={rules.otThreshold} />
         <ToleranceSection initial={rules.tolerances} />
@@ -821,6 +882,7 @@ export function AuditRulesPanel({ onClose }: { onClose: () => void }) {
         <PoNumberSection initial={rules.poNumber} />
         <CustomRulesSection initial={rules.customRules} />
         <BragiPromptSection initial={rules.bragiSystemPrompt} />
+        </ProgramCtx.Provider>
 
         {/* Reset all */}
         <div
