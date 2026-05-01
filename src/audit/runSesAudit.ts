@@ -91,7 +91,7 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     ),
     check11DateRange(parsed.fsmIRows, parsed.fsmIIRows, parsed.declaredPeriod),
     check12TimeOff(parsed.fsmIRows, parsed.fsmIIRows, parsed.timeOffRows),
-    check13PoNumber(parsed.e17Value, rules.poNumber),
+    check13PoNumber(parsed.e17Value, rules.poNumber, 'E19'),
     check14TermedPto(parsed.fsmIRows, parsed.fsmIIRows, parsed.mgmtRows, parsed.termedPtoRows),
     check15CustomRules(parsed.fsmIRows, parsed.fsmIIRows),
     checkSes2020co(parsed.fsmIRows),

@@ -4,31 +4,33 @@
 import type { CheckResult } from '../types';
 
 export function check13PoNumber(
-  e17Value: string | null,
+  cellValue: string | null,
   configuredPo: string,
+  cellRef = 'E17',
 ): CheckResult {
-  if (!e17Value) {
+  const label = `PO Number (${cellRef})`;
+  if (!cellValue) {
     return {
       checkId: 13,
-      checkName: 'PO Number (E17)',
+      checkName: label,
       status: 'warning',
-      stats: 'Cell E17 of first tab is empty or unreadable',
+      stats: `Cell ${cellRef} of first tab is empty or unreadable`,
       flaggedCount: 1,
-      flaggedRows: [{ issue: 'E17 is empty or unreadable', configuredPo }],
+      flaggedRows: [{ issue: `${cellRef} is empty or unreadable`, configuredPo }],
     };
   }
 
-  const match = e17Value.trim().toLowerCase() === configuredPo.trim().toLowerCase();
+  const match = cellValue.trim().toLowerCase() === configuredPo.trim().toLowerCase();
   return {
     checkId: 13,
-    checkName: 'PO Number (E17)',
+    checkName: label,
     status: match ? 'pass' : 'fail',
     stats: match
-      ? `PO# "${e17Value}" matches configured value`
-      : `PO# mismatch — E17 has "${e17Value}", expected "${configuredPo}"`,
+      ? `PO# "${cellValue}" matches configured value`
+      : `PO# mismatch — ${cellRef} has "${cellValue}", expected "${configuredPo}"`,
     flaggedCount: match ? 0 : 1,
     flaggedRows: match
       ? []
-      : [{ cell: 'E17', found: e17Value, expected: configuredPo, issue: 'PO# does not match configured value' }],
+      : [{ cell: cellRef, found: cellValue, expected: configuredPo, issue: 'PO# does not match configured value' }],
   };
 }

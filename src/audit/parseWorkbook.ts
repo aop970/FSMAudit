@@ -902,7 +902,7 @@ export async function parseSesInvoice(
     wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
   }
 
-  // Cover tab metadata
+  // Cover tab metadata — SES PO# is in E19 (not E17)
   let invoiceNumber: string | null = null;
   let periodRange: string | null = null;
   let e17Value: string | null = null;
@@ -912,8 +912,12 @@ export async function parseSesInvoice(
     const meta = readFirstTabMeta(metaWb);
     invoiceNumber   = meta.invoiceNumber;
     periodRange     = meta.periodRange;
-    e17Value        = meta.e17Value;
     invoiceTotalRaw = meta.invoiceTotalRaw;
+    // SES PO# lives in E19, not E17
+    const firstName = metaWb.SheetNames[0];
+    const firstWs = firstName ? metaWb.Sheets[firstName] : null;
+    const e19 = firstWs?.['E19'] as XLSX.CellObject | undefined;
+    e17Value = e19?.v != null ? String(e19.v).trim() : null;
   } catch {
     // non-fatal
   }
@@ -924,8 +928,9 @@ export async function parseSesInvoice(
   const cloud   = findSheet(wb, ['Cloud Services', 'Cloud']);
   const invSum  = findSheet(wb, ['Invoice Summary', 'Tie-Out', 'Invoice Schedule']);
 
-  // SES uses a single Detail sheet mapped as fsmIRows
-  const fsmIRows  = detail ? parseLaborSheet('FSM I', detail.ws) : [];
+  // Use the actual resolved tab name so Check 11 reports it correctly
+  const detailLabel = detail?.name ?? 'Detail';
+  const fsmIRows  = detail ? parseLaborSheet(detailLabel, detail.ws) : [];
   const fsmIIRows: LaborRow[] = [];
   const mgmtRows  = mgmt  ? parseMgmtSheet(mgmt.ws)   : [];
   const cloudRows = cloud ? parseCloudSheet(cloud.ws)  : [];
