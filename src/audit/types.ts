@@ -83,6 +83,7 @@ export interface SesPunchRow {
   associateId: string;
   timeHours: number;
   payrollTag?: string;
+  timeType?: string;
 }
 
 export interface OtApprovalRow {

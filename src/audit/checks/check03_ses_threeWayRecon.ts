@@ -1,13 +1,13 @@
 // Check 3 (SES) — Three-Way Punch Reconciliation
-// Invoice side: sum of Time Hours for punch-supported categories (Work, Admin, Travel, Training, Meeting).
-// Punch side:   sum of all Time Hours (all time types).
+// Invoice side: Work hours only (shift report only captures store visits, not training/travel/admin).
+// Punch side:   Work hours only (same scope as invoice and shift).
 // Shift side:   sum of actualMinutes ÷ 60 across both weekly shift reports.
 // Total tolerance: ≤ 2 hours across any pairwise comparison.
 // Per-person tolerance: ≤ 0.3 hours. Pivot fires only when total variance fails.
 
 import type { CheckResult, LaborRow, SesPunchRow, ShiftRow } from '../types';
 
-const PUNCH_SUPPORTED = new Set(['work', 'admin', 'travel', 'training', 'meeting']);
+const PUNCH_SUPPORTED = new Set(['work']);
 const TOTAL_TOL = 2.0;
 const PER_PERSON_TOL = 0.3;
 
@@ -42,8 +42,11 @@ export function check03SesThreeWayRecon(
     return PUNCH_SUPPORTED.has(cat) ? s + r.timeHours : s;
   }, 0);
 
-  // Punch: all time types
-  const punchHrs = punchRows.reduce((s, r) => s + r.timeHours, 0);
+  // Punch: Work only — shift report only captures store visits
+  const punchHrs = punchRows.reduce((s, r) => {
+    const t = (r.timeType ?? '').toLowerCase().trim();
+    return (!t || t === 'work') ? s + r.timeHours : s;
+  }, 0);
 
   // Shift: actualMinutes ÷ 60 (column Y "Actual Time Entered In Call Report" is in minutes)
   const shiftHrs = shiftRows.reduce((s, r) => s + r.actualMinutes / 60, 0);

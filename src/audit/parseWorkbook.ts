@@ -800,10 +800,11 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
     return -1;
   }
 
-  const cName = findCol('employee name', 'associate name', 'worker name', 'name');
+  const cName = findCol('employee name', 'associate name', 'worker name', 'associate', 'name');
   const cId   = findCol('associate id', 'employee id', 'worker id', 'id');
   const cHrs  = findCol('time hours', 'total hours', 'hours', 'duration');
   const cTag  = findCol('payroll tag', 'tag');
+  const cType = findCol('time type', 'type');
 
   const out: SesPunchRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
@@ -818,6 +819,7 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
       associateId: id,
       timeHours: cHrs >= 0 ? toNum(row[cHrs]) : 0,
       payrollTag: cTag >= 0 ? toStr(row[cTag]) || undefined : undefined,
+      timeType:   cType >= 0 ? toStr(row[cType]) || undefined : undefined,
     });
   }
   return out;
