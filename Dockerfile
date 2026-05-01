@@ -1,7 +1,12 @@
-FROM node:20-alpine
+FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+COPY package*.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
-CMD ["/bin/sh", "-c", "npx vite preview --host 0.0.0.0 --port ${PORT:-3000}"]
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+RUN npm install -g serve@14
+COPY --from=builder /app/dist ./dist
+CMD ["/bin/sh", "-c", "serve -s dist -l ${PORT:-3000}"]

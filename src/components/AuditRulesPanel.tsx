@@ -874,7 +874,7 @@ export function AuditRulesPanel({
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
         <ProgramCtx.Provider value={program}>
         <MarkupRatesSection initial={rules.markupRates} />
-        <HourlyRatesSection initial={rules.hourlyRates} program={program} />
+        {program === 'fsm' && <HourlyRatesSection initial={rules.hourlyRates} program={program} />}
         <PunchCategoriesSection initial={rules.punchCategories} />
         <OtThresholdSection initial={rules.otThreshold} />
         <ToleranceSection initial={rules.tolerances} />
