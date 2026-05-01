@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, FileCheck, X } from 'lucide-react';
 
 type FileRole = 'invoice' | 'punch' | 'timeOff' | 'termedPto' | 'reference' | 'shift' | 'unknown';
@@ -58,13 +58,16 @@ export function MultiDropZone({
   onShift1, onShift2,
 }: MultiDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [dropLog, setDropLog] = useState<string[]>([]);
 
   function processFiles(incoming: File[]) {
     const newTimeOff: File[] = [];
     const newShift: File[] = [];
+    const log: string[] = [];
 
     for (const file of incoming) {
       const role = classifyFile(file.name);
+      log.push(`${file.name} → ${role}`);
       switch (role) {
         case 'invoice':   onInvoice(file);   break;
         case 'punch':     onPunch(file);     break;
@@ -94,6 +97,8 @@ export function MultiDropZone({
       onShift1(sorted[0] ?? null);
       onShift2(sorted[1] ?? null);
     }
+
+    setDropLog(log);
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -181,6 +186,13 @@ export function MultiDropZone({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {dropLog.length > 0 && (
+        <div className="mt-1.5 rounded px-2 py-1.5" style={{ backgroundColor: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-mc-dim mb-1">Last drop — {dropLog.length} file{dropLog.length !== 1 ? 's' : ''} received</p>
+          {dropLog.map((line, i) => <p key={i} className="text-[9px] font-mono text-mc-dim">{line}</p>)}
         </div>
       )}
 
