@@ -1,5 +1,5 @@
 // Check 3 (SES) — Three-Way Punch Reconciliation
-// Invoice side: sum of Time Hours for punch-supported categories (Work, Admin, Travel, Training).
+// Invoice side: sum of Time Hours for punch-supported categories (Work, Admin, Travel, Training, Meeting).
 // Punch side:   sum of all Time Hours (all time types).
 // Shift side:   sum of actualMinutes ÷ 60 across both weekly shift reports.
 // Total tolerance: ≤ 2 hours across any pairwise comparison.
@@ -7,7 +7,7 @@
 
 import type { CheckResult, LaborRow, SesPunchRow, ShiftRow } from '../types';
 
-const PUNCH_SUPPORTED = new Set(['work', 'admin', 'travel', 'training']);
+const PUNCH_SUPPORTED = new Set(['work', 'admin', 'travel', 'training', 'meeting']);
 const TOTAL_TOL = 2.0;
 const PER_PERSON_TOL = 0.3;
 
