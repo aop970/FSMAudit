@@ -824,6 +824,10 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
 }
 
 // ── Shift report XLSX parser ──────────────────────────────────────────────────
+// Reads the "Actual" tab. Known headers include:
+//   Vendor EMP ID | SEC Full Name | Actual Time Entered In Call Report
+// "Actual Time Entered In Call Report" is stored as an Excel time fraction
+// (fraction of 24h, e.g. 0.3333 = 8 hours). Values > 1 are treated as hours.
 
 export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
   const buf = await readBuf(file);
@@ -833,72 +837,92 @@ export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
   } catch {
     return [];
   }
-  const ws = wb.Sheets[wb.SheetNames[0]];
+
+  // Prefer the "Actual" tab; fall back to first sheet
+  const sheetName =
+    wb.SheetNames.find((n) => n.trim().toLowerCase() === 'actual') ??
+    wb.SheetNames[0];
+  const ws = wb.Sheets[sheetName];
   if (!ws) return [];
 
   const aoa = readAoA(ws);
   if (aoa.length < 2) return [];
 
-  // Find header row — search first 10 rows
+  // Find header row — search first 10 rows for any row with identifier keywords
   let hIdx = 0;
   for (let i = 0; i < Math.min(10, aoa.length); i++) {
     const row = aoa[i] || [];
     const vals = row.map((c) => toStr(c).toLowerCase());
-    if (vals.some((v) => v.includes('name') || v.includes('associate') || v.includes('employee') || v.includes('actual') || v.includes('minute') || v.includes('hours'))) {
+    if (vals.some((v) =>
+      v.includes('emp id') || v.includes('associate') || v.includes('employee') ||
+      v.includes('vendor') || v.includes('actual') || v.includes('name')
+    )) {
       hIdx = i; break;
     }
   }
 
-  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase().trim());
+
   function findCol(...aliases: string[]): number {
     for (const a of aliases) {
-      const exact = headers.indexOf(a);
+      const exact = headers.indexOf(a.toLowerCase());
       if (exact >= 0) return exact;
     }
     for (const a of aliases) {
-      const partial = headers.findIndex((h) => h.includes(a));
+      const partial = headers.findIndex((h) => h.includes(a.toLowerCase()));
       if (partial >= 0) return partial;
     }
     return -1;
   }
 
-  const cId     = findCol('associate id', 'employee id', 'worker id', 'id');
-  const cName   = findCol('employee name', 'associate name', 'worker name', 'name');
-  // Actual time column — could be "Actual Time", "Actual Minutes", "Total Minutes", "Duration", "Actual"
-  const cActual = findCol('actual time', 'actual minutes', 'total minutes', 'duration', 'actual', 'time', 'hours');
+  // Known column names from SES shift report
+  const cId     = findCol('vendor emp id', 'associate id', 'employee id', 'emp id', 'vendor id', 'id');
+  const cName   = findCol('sec full name', 'employee name', 'associate name', 'worker name', 'full name', 'name');
+  // "Actual Time Entered In Call Report" — Excel time fraction (0–1 = fraction of 24h)
+  const cActual = findCol(
+    'actual time entered in call report',
+    'actual time entered',
+    'actual time',
+    'actual minutes',
+    'actual',
+  );
 
   const out: ShiftRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
     if (row.every((v) => v == null || v === '')) continue;
-    const id = cId >= 0 ? toStr(row[cId]) : '';
-    const name = cName >= 0 ? toStr(row[cName]) : '';
+    const id   = cId   >= 0 ? toStr(row[cId]).trim()   : '';
+    const name = cName >= 0 ? toStr(row[cName]).trim()  : '';
     if (!id && !name) continue;
 
     let actualMinutes = 0;
     if (cActual >= 0 && row[cActual] != null) {
       const raw = row[cActual];
       if (typeof raw === 'number') {
-        // Values > 24 are already minutes; ≤ 24 are hours — convert to minutes
-        actualMinutes = raw > 24 ? raw : raw * 60;
+        if (raw > 0 && raw < 1) {
+          // Excel time fraction: fraction of 24 hours (e.g. 0.3333 = 8h)
+          actualMinutes = raw * 24 * 60;
+        } else if (raw >= 1 && raw <= 24) {
+          // Decimal hours
+          actualMinutes = raw * 60;
+        } else if (raw > 24) {
+          // Already in minutes
+          actualMinutes = raw;
+        }
       } else {
-        const s = toStr(raw);
+        const s = toStr(raw).trim();
+        // HH:MM or H:MM format
         const hmMatch = s.match(/^(\d+):(\d{2})(?::\d{2})?$/);
         if (hmMatch) {
           actualMinutes = parseInt(hmMatch[1], 10) * 60 + parseInt(hmMatch[2], 10);
         } else {
           const n = parseFloat(s);
-          if (!isNaN(n)) actualMinutes = n > 24 ? n : n * 60;
+          if (!isNaN(n)) actualMinutes = n < 1 ? n * 24 * 60 : n > 24 ? n : n * 60;
         }
       }
     }
 
-    out.push({
-      rowNum: i + 1,
-      associateId: id,
-      employeeName: name,
-      actualMinutes,
-    });
+    out.push({ rowNum: i + 1, associateId: id, employeeName: name, actualMinutes });
   }
   return out;
 }

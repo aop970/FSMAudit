@@ -1,11 +1,9 @@
 // Check 3 (SES) — Three-Way Punch Reconciliation
-// Invoice Detail punch-supported hours vs Punch Detail hours vs Shift Report (Actual) hours.
-// Punch-supported categories: Work, Admin, Travel, Training, Meeting, Break (case-insensitive).
-// Total tolerance: ≤ 2 hours. Individual associate tolerance: ≤ 0.3 hours.
+// Invoice Detail total hours vs Punch Detail hours vs Shift Report (Actual) hours.
+// Total tolerance: ≤ 2 hours.
 
 import type { CheckResult, LaborRow, SesPunchRow, ShiftRow } from '../types';
 
-const PUNCH_SUPPORTED = new Set(['work', 'admin', 'travel', 'training', 'meeting', 'break']);
 const TOTAL_TOL = 2.0;
 
 export function check03SesThreeWayRecon(
@@ -27,11 +25,8 @@ export function check03SesThreeWayRecon(
     };
   }
 
-  // Sum invoice Detail hours for punch-supported categories
-  const invoiceHrs = detailRows.reduce((s, r) => {
-    const cat = r.comments.toLowerCase().trim();
-    return PUNCH_SUPPORTED.has(cat) ? s + r.timeHours : s;
-  }, 0);
+  // Sum all invoice Detail hours — SES rows represent billable work regardless of category
+  const invoiceHrs = detailRows.reduce((s, r) => s + r.timeHours, 0);
 
   // Sum all punch Time Hours
   const punchHrs = punchRows.reduce((s, r) => s + r.timeHours, 0);
