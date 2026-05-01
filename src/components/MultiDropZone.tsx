@@ -1,24 +1,26 @@
 import { useRef } from 'react';
 import { Upload, FileCheck, X } from 'lucide-react';
 
-type FileRole = 'invoice' | 'punch' | 'timeOff' | 'termedPto' | 'reference' | 'unknown';
+type FileRole = 'invoice' | 'punch' | 'timeOff' | 'termedPto' | 'reference' | 'shift' | 'unknown';
 
 function classifyFile(name: string): FileRole {
-  if (/punch.?detail/i.test(name)) return 'punch';
-  if (/^FSM26/i.test(name))        return 'invoice';
-  if (/time.?off/i.test(name))     return 'timeOff';
-  if (/termed/i.test(name))        return 'termedPto';
-  if (/\.csv$/i.test(name))        return 'reference';
+  if (/Weekly.?Shift.?Information/i.test(name)) return 'shift';
+  if (/Punch.?Detail/i.test(name))  return 'punch';
+  if (/time.?off/i.test(name))      return 'timeOff';
+  if (/termed/i.test(name))         return 'termedPto';
+  if (/Day-SES/i.test(name) || /^FSM26/i.test(name)) return 'invoice';
+  if (/\.csv$/i.test(name))         return 'reference';
   return 'unknown';
 }
 
 const ROLE_STYLE: Record<FileRole, { bg: string; text: string; label: string }> = {
-  invoice:   { bg: 'rgba(59,158,255,0.15)',  text: '#3b9eff',  label: 'Invoice'       },
-  punch:     { bg: 'rgba(34,208,107,0.15)',  text: '#22d06b',  label: 'Punch Detail'  },
-  timeOff:   { bg: 'rgba(255,186,8,0.15)',   text: '#ffba08',  label: 'Time Off'      },
-  termedPto: { bg: 'rgba(192,132,252,0.15)', text: '#c084fc',  label: 'Termed PTO'    },
-  reference: { bg: 'rgba(148,163,184,0.15)', text: '#94a3b8',  label: 'Reference'     },
-  unknown:   { bg: 'rgba(248,113,113,0.15)', text: '#f87171',  label: 'Unrecognized'  },
+  invoice:   { bg: 'color-mix(in srgb, var(--mc-blue) 15%, transparent)',  text: 'var(--mc-blue)',  label: 'Invoice'       },
+  punch:     { bg: 'rgba(34,208,107,0.15)',   text: '#22d06b',  label: 'Punch Detail'  },
+  timeOff:   { bg: 'rgba(255,186,8,0.15)',    text: '#ffba08',  label: 'Time Off'      },
+  termedPto: { bg: 'rgba(192,132,252,0.15)',  text: '#c084fc',  label: 'Termed PTO'    },
+  reference: { bg: 'rgba(148,163,184,0.15)',  text: '#94a3b8',  label: 'Reference'     },
+  shift:     { bg: 'rgba(192,132,252,0.15)',  text: '#c084fc',  label: 'Shift Report'  },
+  unknown:   { bg: 'rgba(248,113,113,0.15)',  text: '#f87171',  label: 'Unrecognized'  },
 };
 
 interface SlotEntry {
@@ -29,28 +31,37 @@ interface SlotEntry {
 }
 
 export interface MultiDropZoneProps {
+  program:       'fsm' | 'ses';
   invoiceFile:   File | null;
   punchFile:     File | null;
   timeOffFile1:  File | null;
   timeOffFile2:  File | null;
   termedPtoFile: File | null;
   refFile:       File | null;
+  shiftFile1:    File | null;
+  shiftFile2:    File | null;
   onInvoice:   (f: File | null) => void;
   onPunch:     (f: File | null) => void;
   onTimeOff1:  (f: File | null) => void;
   onTimeOff2:  (f: File | null) => void;
   onTermedPto: (f: File | null) => void;
   onRef:       (f: File | null) => void;
+  onShift1:    (f: File | null) => void;
+  onShift2:    (f: File | null) => void;
 }
 
 export function MultiDropZone({
+  program,
   invoiceFile, punchFile, timeOffFile1, timeOffFile2, termedPtoFile, refFile,
+  shiftFile1, shiftFile2,
   onInvoice, onPunch, onTimeOff1, onTimeOff2, onTermedPto, onRef,
+  onShift1, onShift2,
 }: MultiDropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   function processFiles(incoming: File[]) {
     const newTimeOff: File[] = [];
+    const newShift: File[] = [];
 
     for (const file of incoming) {
       const role = classifyFile(file.name);
@@ -60,19 +71,28 @@ export function MultiDropZone({
         case 'timeOff':   newTimeOff.push(file); break;
         case 'termedPto': onTermedPto(file); break;
         case 'reference': onRef(file);       break;
+        case 'shift':     newShift.push(file); break;
         // unknown: silently skip
       }
     }
 
     if (newTimeOff.length > 0) {
-      // Merge with existing time-off files, deduplicate by name, sort (date in
-      // filename means alphabetical order = chronological order = Wk1 / Wk2).
+      // Merge with existing time-off files, deduplicate by name, sort
       const existing = [timeOffFile1, timeOffFile2].filter(Boolean) as File[];
       const byName = new Map<string, File>();
       for (const f of [...existing, ...newTimeOff]) byName.set(f.name, f);
       const sorted = Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
       onTimeOff1(sorted[0] ?? null);
       onTimeOff2(sorted[1] ?? null);
+    }
+
+    if (newShift.length > 0) {
+      const existing = [shiftFile1, shiftFile2].filter(Boolean) as File[];
+      const byName = new Map<string, File>();
+      for (const f of [...existing, ...newShift]) byName.set(f.name, f);
+      const sorted = Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+      onShift1(sorted[0] ?? null);
+      onShift2(sorted[1] ?? null);
     }
   }
 
@@ -93,6 +113,8 @@ export function MultiDropZone({
     timeOffFile2  && { file: timeOffFile2,  role: 'timeOff'   as FileRole, slotLabel: 'Time Off (Wk 2)', onRemove: () => onTimeOff2(null)  },
     termedPtoFile && { file: termedPtoFile, role: 'termedPto' as FileRole, slotLabel: 'Termed PTO',      onRemove: () => onTermedPto(null) },
     refFile       && { file: refFile,       role: 'reference' as FileRole, slotLabel: 'Reference',        onRemove: () => onRef(null)       },
+    ...(program === 'ses' && shiftFile1 ? [{ file: shiftFile1, role: 'shift' as FileRole, slotLabel: 'Shift Rpt (Wk 1)', onRemove: () => onShift1(null) }] : []),
+    ...(program === 'ses' && shiftFile2 ? [{ file: shiftFile2, role: 'shift' as FileRole, slotLabel: 'Shift Rpt (Wk 2)', onRemove: () => onShift2(null) }] : []),
   ].filter(Boolean) as SlotEntry[];
 
   const hasFiles = slots.length > 0;
@@ -102,8 +124,8 @@ export function MultiDropZone({
       <div
         className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-3 py-5 text-center transition cursor-pointer"
         style={{
-          borderColor: hasFiles ? 'rgba(34,208,107,0.35)' : 'rgba(59,158,255,0.35)',
-          backgroundColor: hasFiles ? 'rgba(34,208,107,0.04)' : 'rgba(13,17,32,0.6)',
+          borderColor: hasFiles ? 'color-mix(in srgb, var(--mc-green) 35%, transparent)' : 'color-mix(in srgb, var(--mc-blue) 35%, transparent)',
+          backgroundColor: hasFiles ? 'color-mix(in srgb, var(--mc-green) 4%, transparent)' : 'color-mix(in srgb, var(--mc-bg2) 60%, transparent)',
         }}
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
@@ -120,7 +142,9 @@ export function MultiDropZone({
         <Upload className="mb-1.5 h-5 w-5 text-mc-dim" />
         <p className="text-xs font-semibold text-mc-text">Drop all files here</p>
         <p className="text-[10px] text-mc-dim mt-0.5 leading-relaxed">
-          Invoice · Punch Detail · Time Off · Termed PTO · Reference
+          {program === 'ses'
+            ? 'Invoice · Punch Detail · Shift Reports · Time Off · Termed PTO'
+            : 'Invoice · Punch Detail · Time Off · Termed PTO · Reference'}
           <br />
           Files are auto-detected by name
         </p>
@@ -134,7 +158,7 @@ export function MultiDropZone({
               <div
                 key={i}
                 className="flex items-center gap-2 rounded-md px-2.5 py-1.5"
-                style={{ backgroundColor: 'rgba(7,9,15,0.5)', border: '1px solid var(--mc-card-border)' }}
+                style={{ backgroundColor: 'color-mix(in srgb, var(--mc-bg) 50%, transparent)', border: '1px solid var(--mc-card-border)' }}
               >
                 <FileCheck className="h-3.5 w-3.5 shrink-0" style={{ color: style.text }} />
                 <div className="flex-1 min-w-0">
@@ -160,7 +184,10 @@ export function MultiDropZone({
         </div>
       )}
 
-      {!invoiceFile && hasFiles && (
+      {program === 'ses' && invoiceFile && !/^Day-SES/i.test(invoiceFile.name) && (
+        <p className="mt-1.5 text-[10px] text-rose-400">SES invoice name should start with Day-SES</p>
+      )}
+      {program === 'fsm' && !invoiceFile && hasFiles && (
         <p className="mt-1.5 text-[10px] text-rose-400">
           Invoice file required — name must start with FSM26
         </p>

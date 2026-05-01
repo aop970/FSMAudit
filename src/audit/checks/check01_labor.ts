@@ -33,9 +33,11 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
     const billOk = Math.abs(bill - r.billValue) <= dollarTol;
     const muOk   = Math.abs(mu - r.muValue)     <= dollarTol;
 
-    // Hourly rate validation — only when configured (> 0) and row has a non-zero base rate
+    // Hourly rate validation — only when configured (> 0) and row has a non-zero base rate.
+    // OT rows are intentionally billed at half the base rate — skip the rate check for them.
+    const isOT = /over.?time/i.test(r.comments);
     const expectedRate = r.sheet === 'FSM I' ? expectedRateI : expectedRateII;
-    const rateOk = expectedRate === 0 || r.basePayRate === 0
+    const rateOk = expectedRate === 0 || r.basePayRate === 0 || isOT
       ? true
       : Math.abs(r.basePayRate - expectedRate) <= dollarTol;
 

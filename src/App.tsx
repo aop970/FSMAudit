@@ -15,8 +15,10 @@ import {
   saveControlTable,
   getControlTableTimestamp,
 } from './audit/controlTable';
-import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile } from './audit/parseWorkbook';
+import { loadSesControlTable, saveSesControlTable } from './audit/sesControlTable';
+import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile, parseSesInvoice } from './audit/parseWorkbook';
 import { runAudit } from './audit/runAudit';
+import { runSesAudit } from './audit/runSesAudit';
 import { getAuditRules } from './audit/auditRules';
 import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow } from './audit/types';
 import { analyzeAllFailures } from './ai/bragiClient';
@@ -65,6 +67,9 @@ function deriveOverallStatus(results: AuditPayload['results']): 'pass' | 'fail' 
 }
 
 export default function App() {
+  // Program selector
+  const [program, setProgram] = useState<'fsm' | 'ses'>('fsm');
+
   // File state
   const [invoiceFile, setInvoiceFile]       = useState<File | null>(null);
   const [punchFile, setPunchFile]           = useState<File | null>(null);
@@ -72,6 +77,8 @@ export default function App() {
   const [timeOffFile1, setTimeOffFile1]     = useState<File | null>(null);
   const [timeOffFile2, setTimeOffFile2]     = useState<File | null>(null);
   const [termedPtoFile, setTermedPtoFile]   = useState<File | null>(null);
+  const [shiftFile1, setShiftFile1]         = useState<File | null>(null);
+  const [shiftFile2, setShiftFile2]         = useState<File | null>(null);
   const [emailFile, setEmailFile]           = useState<File | null>(null);
   const [emailEntries, setEmailEntries]     = useState<EmailEntry[]>([]);
   const [emailParseError, setEmailParseError] = useState<string | null>(null);
@@ -83,8 +90,9 @@ export default function App() {
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
   const [payload, setPayload]         = useState<AuditPayload | null>(null);
 
-  // Control table
+  // Control tables
   const [controlTable, setControlTable] = useState<ControlTableEntry[]>(() => loadControlTable());
+  const [sesControlTable, setSesControlTable] = useState<ControlTableEntry[]>(() => loadSesControlTable());
   const [, setCtTimestamp]   = useState<string | null>(() => getControlTableTimestamp());
 
   // API key (never persisted)
@@ -129,12 +137,15 @@ export default function App() {
   // Ref for reference file zone (for the ControlTableBadge scroll-to)
   const refZoneRef = useRef<HTMLDivElement>(null);
 
-  // On mount, seed audit rules (no-op if already present) and control table
+  // On mount, seed audit rules (no-op if already present) and control tables
   useEffect(() => {
-    getAuditRules(); // seeds defaults into localStorage if not present
+    getAuditRules('fsm'); // seeds defaults into localStorage if not present
+    getAuditRules('ses');
     const ct = loadControlTable();
     setControlTable(ct);
     setCtTimestamp(getControlTableTimestamp());
+    const sesCt = loadSesControlTable();
+    setSesControlTable(sesCt);
   }, []);
 
   // When a reference CSV is uploaded, parse and save control table override
@@ -158,8 +169,13 @@ export default function App() {
         })).filter((e) => e.name && e.associateId);
 
         if (entries.length > 0) {
-          saveControlTable(entries);
-          setControlTable(entries);
+          if (program === 'ses') {
+            saveSesControlTable(entries);
+            setSesControlTable(entries);
+          } else {
+            saveControlTable(entries);
+            setControlTable(entries);
+          }
           setCtTimestamp(getControlTableTimestamp());
         }
       } catch (e) {
@@ -180,40 +196,74 @@ export default function App() {
     setStatusMsg('Reading invoice workbook…');
 
     try {
-      const parsed = await parseInvoice(invoiceFile, punchFile);
+      if (program === 'ses') {
+        const parsed = await parseSesInvoice(invoiceFile, punchFile, shiftFile1, shiftFile2);
 
-      // Parse time off files and inject into parsed data
-      const timeOffFilesUploaded = [timeOffFile1, timeOffFile2].filter(Boolean) as File[];
-      if (timeOffFilesUploaded.length > 0) {
-        setStatusMsg('Parsing time off reports…');
-        await new Promise((r) => setTimeout(r, 0));
-        const allTimeOff: TimeOffRow[] = [];
-        for (const f of timeOffFilesUploaded) {
-          const rows = await parseTimeOffFile(f);
-          allTimeOff.push(...rows);
+        // Parse time off files and inject
+        const timeOffFilesUploaded = [timeOffFile1, timeOffFile2].filter(Boolean) as File[];
+        if (timeOffFilesUploaded.length > 0) {
+          setStatusMsg('Parsing time off reports…');
+          await new Promise((r) => setTimeout(r, 0));
+          const allTimeOff: TimeOffRow[] = [];
+          for (const f of timeOffFilesUploaded) {
+            const rows = await parseTimeOffFile(f);
+            allTimeOff.push(...rows);
+          }
+          parsed.timeOffRows = allTimeOff;
+          parsed.timeOffFileNames = timeOffFilesUploaded.map((f) => f.name);
         }
-        parsed.timeOffRows = allTimeOff;
-        parsed.timeOffFileNames = timeOffFilesUploaded.map((f) => f.name);
-      }
 
-      // Parse Termed PTO file and inject
-      if (termedPtoFile) {
-        setStatusMsg('Parsing Termed PTO file…');
+        if (termedPtoFile) {
+          setStatusMsg('Parsing Termed PTO file…');
+          await new Promise((r) => setTimeout(r, 0));
+          const termedRows: TermedPtoRow[] = await parseTermedPtoFile(termedPtoFile);
+          parsed.termedPtoRows = termedRows;
+        }
+
+        setStatusMsg('Running 18 SES audit checks…');
+        setAppState('auditing');
         await new Promise((r) => setTimeout(r, 0));
-        const termedRows: TermedPtoRow[] = await parseTermedPtoFile(termedPtoFile);
-        parsed.termedPtoRows = termedRows;
+
+        const result = runSesAudit(parsed, sesControlTable);
+        setPayload(result);
+        setAppState('done');
+        setStatusMsg('');
+      } else {
+        const parsed = await parseInvoice(invoiceFile, punchFile);
+
+        // Parse time off files and inject into parsed data
+        const timeOffFilesUploaded = [timeOffFile1, timeOffFile2].filter(Boolean) as File[];
+        if (timeOffFilesUploaded.length > 0) {
+          setStatusMsg('Parsing time off reports…');
+          await new Promise((r) => setTimeout(r, 0));
+          const allTimeOff: TimeOffRow[] = [];
+          for (const f of timeOffFilesUploaded) {
+            const rows = await parseTimeOffFile(f);
+            allTimeOff.push(...rows);
+          }
+          parsed.timeOffRows = allTimeOff;
+          parsed.timeOffFileNames = timeOffFilesUploaded.map((f) => f.name);
+        }
+
+        // Parse Termed PTO file and inject
+        if (termedPtoFile) {
+          setStatusMsg('Parsing Termed PTO file…');
+          await new Promise((r) => setTimeout(r, 0));
+          const termedRows: TermedPtoRow[] = await parseTermedPtoFile(termedPtoFile);
+          parsed.termedPtoRows = termedRows;
+        }
+
+        setStatusMsg('Running 15 audit checks…');
+        setAppState('auditing');
+
+        // Yield to event loop so UI updates
+        await new Promise((r) => setTimeout(r, 0));
+
+        const result = runAudit(parsed, controlTable);
+        setPayload(result);
+        setAppState('done');
+        setStatusMsg('');
       }
-
-      setStatusMsg('Running 14 audit checks…');
-      setAppState('auditing');
-
-      // Yield to event loop so UI updates
-      await new Promise((r) => setTimeout(r, 0));
-
-      const result = runAudit(parsed, controlTable);
-      setPayload(result);
-      setAppState('done');
-      setStatusMsg('');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('Audit error:', err);
@@ -230,6 +280,8 @@ export default function App() {
     setTimeOffFile1(null);
     setTimeOffFile2(null);
     setTermedPtoFile(null);
+    setShiftFile1(null);
+    setShiftFile2(null);
     setEmailFile(null);
     setEmailEntries([]);
     setEmailParseError(null);
@@ -246,6 +298,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-mc-bg">
       <Header
+        program={program}
         fileName={payload?.invoiceFile}
         overallStatus={overallStatus ?? (appState === 'parsing' || appState === 'auditing' ? 'pending' : null)}
         rulesOpen={rulesOpen}
@@ -261,21 +314,47 @@ export default function App() {
           style={{ borderRight: '1px solid var(--mc-card-border)', backgroundColor: 'var(--mc-bg2)' }}
         >
           <div>
+            {/* Program Selector */}
+            <div
+              className="flex rounded-lg overflow-hidden mb-4"
+              style={{ border: '1px solid var(--mc-card-border)' }}
+            >
+              {(['fsm', 'ses'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => { if (program !== p) { setProgram(p); reset(); } }}
+                  className="flex-1 py-1.5 text-xs font-bold uppercase tracking-wide transition"
+                  style={{
+                    backgroundColor: program === p ? 'var(--mc-blue)' : 'transparent',
+                    color: program === p ? '#fff' : 'var(--mc-text-dim)',
+                  }}
+                >
+                  {p === 'fsm' ? 'FSM' : 'SES'}
+                </button>
+              ))}
+            </div>
+
             <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-mc-dim">Upload Files</h2>
             <div ref={refZoneRef}>
               <MultiDropZone
+                program={program}
                 invoiceFile={invoiceFile}
                 punchFile={punchFile}
                 timeOffFile1={timeOffFile1}
                 timeOffFile2={timeOffFile2}
                 termedPtoFile={termedPtoFile}
                 refFile={refFile}
+                shiftFile1={shiftFile1}
+                shiftFile2={shiftFile2}
                 onInvoice={setInvoiceFile}
                 onPunch={setPunchFile}
                 onTimeOff1={setTimeOffFile1}
                 onTimeOff2={setTimeOffFile2}
                 onTermedPto={setTermedPtoFile}
                 onRef={setRefFile}
+                onShift1={setShiftFile1}
+                onShift2={setShiftFile2}
               />
             </div>
 
@@ -295,8 +374,8 @@ export default function App() {
                   onClick={() => emailInputRef.current?.click()}
                   className="flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[10px] font-medium transition"
                   style={{
-                    border: '1px dashed rgba(59,158,255,0.35)',
-                    backgroundColor: 'rgba(13,17,32,0.6)',
+                    border: '1px dashed color-mix(in srgb, var(--mc-blue) 35%, transparent)',
+                    backgroundColor: 'color-mix(in srgb, var(--mc-bg2) 60%, transparent)',
                     color: 'var(--mc-text-dim)',
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(59,158,255,0.6)')}
@@ -308,7 +387,7 @@ export default function App() {
               ) : (
                 <div
                   className="flex items-center gap-2 rounded-md px-2.5 py-1.5"
-                  style={{ backgroundColor: 'rgba(7,9,15,0.5)', border: '1px solid var(--mc-card-border)' }}
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--mc-bg) 50%, transparent)', border: '1px solid var(--mc-card-border)' }}
                 >
                   <Mail className="h-3.5 w-3.5 shrink-0 text-mc-blue" />
                   <div className="flex-1 min-w-0">
@@ -374,7 +453,7 @@ export default function App() {
                 spellCheck={false}
                 className="w-full rounded-lg px-3 py-2 pr-8 text-xs text-mc-text placeholder-mc-dim focus:outline-none focus:ring-1"
                 style={{
-                  backgroundColor: 'rgba(7, 9, 15, 0.8)',
+                  backgroundColor: 'color-mix(in srgb, var(--mc-bg) 80%, transparent)',
                   border: '1px solid var(--mc-card-border)',
                 }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = 'rgba(59,158,255,0.5)')}
@@ -393,7 +472,7 @@ export default function App() {
 
           {/* Analyze All — sidebar trigger (visible when key set + failures exist) */}
           {apiKey.trim() && payload && payload.results.filter((r) => r.status === 'fail' || r.status === 'warning').length >= 2 && (
-            <div className="rounded-lg px-3 py-2.5" style={{ border: '1px solid rgba(59,158,255,0.25)', backgroundColor: 'rgba(59,158,255,0.06)' }}>
+            <div className="rounded-lg px-3 py-2.5" style={{ border: '1px solid color-mix(in srgb, var(--mc-blue) 25%, transparent)', backgroundColor: 'color-mix(in srgb, var(--mc-blue) 6%, transparent)' }}>
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-mc-blue">Bragi Analysis</p>
               {aaState === 'idle' && (
                 <button
@@ -431,7 +510,7 @@ export default function App() {
 
           {/* Run button */}
           <div className="mt-auto space-y-2">
-            {(invoiceFile || punchFile || timeOffFile1 || timeOffFile2 || termedPtoFile || emailFile || payload) && (
+            {(invoiceFile || punchFile || timeOffFile1 || timeOffFile2 || termedPtoFile || shiftFile1 || shiftFile2 || emailFile || payload) && (
               <button
                 type="button"
                 onClick={reset}
@@ -473,7 +552,7 @@ export default function App() {
         {/* ── CENTER PANEL: results ── */}
         <main className="flex-1 overflow-y-auto px-6 py-6 space-y-6 bg-mc-bg">
           {!payload && !busy && (
-            <div className="mt-16 rounded-xl border-2 border-dashed px-8 py-16 text-center" style={{ borderColor: 'rgba(59,158,255,0.2)', backgroundColor: 'rgba(13,17,32,0.4)' }}>
+            <div className="mt-16 rounded-xl border-2 border-dashed px-8 py-16 text-center" style={{ borderColor: 'color-mix(in srgb, var(--mc-blue) 20%, transparent)', backgroundColor: 'color-mix(in srgb, var(--mc-bg2) 40%, transparent)' }}>
               <p className="text-sm font-semibold text-mc-text">No audit run yet</p>
               <p className="mt-1 text-xs text-mc-dim">
                 Upload an invoice workbook (.xlsx/.xlsb) in the left panel and click Run Audit.
@@ -556,7 +635,7 @@ export default function App() {
                   const dotColor = r.status === 'pass' ? '#22d06b'
                     : r.status === 'fail' ? '#f87171'
                     : r.status === 'warning' ? '#ffba08'
-                    : '#5a6a88';
+                    : 'var(--mc-text-dim)';
                   return (
                     <div key={r.checkId} className="flex items-center gap-2">
                       <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
@@ -618,7 +697,7 @@ export default function App() {
           className="fixed inset-y-0 right-0 z-50 shadow-2xl"
           style={{ top: 53 }}
         >
-          <AuditRulesPanel onClose={() => setRulesOpen(false)} />
+          <AuditRulesPanel program={program} onClose={() => setRulesOpen(false)} />
         </div>
       )}
 

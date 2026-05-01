@@ -1,6 +1,7 @@
 import { FileSpreadsheet, Settings } from 'lucide-react';
 
 interface HeaderProps {
+  program?: 'fsm' | 'ses';
   fileName?: string;
   overallStatus?: 'pass' | 'fail' | 'warning' | 'pending' | null;
   rulesOpen?: boolean;
@@ -14,7 +15,7 @@ const STATUS_BADGE: Record<string, string> = {
   pending: 'bg-mc-dim/20 text-mc-dim border border-mc-dim/30',
 };
 
-export function Header({ fileName, overallStatus, rulesOpen, onToggleRules }: HeaderProps) {
+export function Header({ program = 'fsm', fileName, overallStatus, rulesOpen, onToggleRules }: HeaderProps) {
   return (
     <header className="border-b border-mc-card-border bg-mc-bg2 shadow-sm" style={{ borderColor: 'var(--mc-card-border)' }}>
       <div className="mx-auto flex max-w-screen-2xl items-center justify-between gap-4 px-6 py-3">
@@ -24,7 +25,7 @@ export function Header({ fileName, overallStatus, rulesOpen, onToggleRules }: He
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-tight text-mc-text">
-              FSM Invoice Audit
+              {program === 'ses' ? 'SES Invoice Audit' : 'FSM Invoice Audit'}
             </h1>
             <p className="text-xs text-mc-dim">Tier 1 Engine + Bragi Analysis</p>
           </div>
