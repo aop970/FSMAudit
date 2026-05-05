@@ -9,6 +9,7 @@ interface CheckCardProps {
   result: CheckResult;
   defaultOpen?: boolean;
   apiKey: string;
+  onTokensUsed?: (inputTokens: number, outputTokens: number) => void;
 }
 
 const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label: string; icon: React.ReactNode }> = {
@@ -38,7 +39,7 @@ const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label
   },
 };
 
-export function CheckCard({ result, defaultOpen = false, apiKey }: CheckCardProps) {
+export function CheckCard({ result, defaultOpen = false, apiKey, onTokensUsed }: CheckCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [aiState, setAiState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [aiOutput, setAiOutput] = useState('');
@@ -53,9 +54,10 @@ export function CheckCard({ result, defaultOpen = false, apiKey }: CheckCardProp
     setAiState('loading');
     setAiError('');
     try {
-      const text = await analyzeCheck(apiKey, result);
+      const { text, inputTokens, outputTokens } = await analyzeCheck(apiKey, result);
       setAiOutput(text);
       setAiState('done');
+      onTokensUsed?.(inputTokens, outputTokens);
     } catch (err) {
       setAiError(err instanceof Error ? err.message : String(err));
       setAiState('error');

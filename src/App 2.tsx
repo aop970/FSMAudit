@@ -95,26 +95,9 @@ export default function App() {
   const [sesControlTable, setSesControlTable] = useState<ControlTableEntry[]>(() => loadSesControlTable());
   const [, setCtTimestamp]   = useState<string | null>(() => getControlTableTimestamp());
 
-  // API key — env var baked at build time, overridable via localStorage
-  const [apiKey, setApiKey]           = useState(() =>
-    localStorage.getItem('bragi-api-key') ?? import.meta.env.VITE_BRAGI_API_KEY ?? ''
-  );
+  // API key (never persisted)
+  const [apiKey, setApiKey]           = useState('');
   const [showKey, setShowKey]         = useState(false);
-
-  // Cumulative token usage this session
-  const [tokenUsage, setTokenUsage]   = useState<{ input: number; output: number }>({ input: 0, output: 0 });
-
-  function addTokens(input: number, output: number) {
-    setTokenUsage((prev) => ({ input: prev.input + input, output: prev.output + output }));
-  }
-
-  useEffect(() => {
-    if (apiKey.trim()) {
-      localStorage.setItem('bragi-api-key', apiKey);
-    } else {
-      localStorage.removeItem('bragi-api-key');
-    }
-  }, [apiKey]);
 
   // Analyze All state (lifted so sidebar button can trigger it)
   const [aaState, setAaState]         = useState<AnalyzeAllState>('idle');
@@ -126,14 +109,13 @@ export default function App() {
     setAaState('loading');
     setAaError('');
     try {
-      const { text, inputTokens, outputTokens } = await analyzeAllFailures(
+      const { text } = await analyzeAllFailures(
         apiKey,
         payload.results,
         emailEntries.length > 0 ? emailEntries : undefined,
       );
       setAaOutput(text);
       setAaState('done');
-      addTokens(inputTokens, outputTokens);
     } catch (err) {
       setAaError(err instanceof Error ? err.message : String(err));
       setAaState('error');
@@ -485,59 +467,8 @@ export default function App() {
                 {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               </button>
             </div>
-            <p className="mt-1 text-[10px] text-mc-dim">
-              Saved to this browser.{' '}
-              {apiKey.trim() ? (
-                <button
-                  type="button"
-                  onClick={() => setApiKey('')}
-                  className="underline hover:text-rose-400 transition"
-                >
-                  Clear
-                </button>
-              ) : (
-                'Enables "Analyze with Bragi" on failing checks.'
-              )}
-            </p>
+            <p className="mt-1 text-[10px] text-mc-dim">Never stored. Enables "Analyze with Bragi" on failing checks.</p>
           </div>
-
-          {/* Token Usage */}
-          {(tokenUsage.input > 0 || tokenUsage.output > 0) && (
-            <div
-              className="rounded-lg px-3 py-2.5 space-y-1.5"
-              style={{ border: '1px solid var(--mc-card-border)', backgroundColor: 'color-mix(in srgb, var(--mc-bg) 60%, transparent)' }}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-mc-dim">Token Usage</p>
-                <button
-                  type="button"
-                  onClick={() => setTokenUsage({ input: 0, output: 0 })}
-                  className="text-[9px] text-mc-dim hover:text-mc-text transition"
-                >
-                  Reset
-                </button>
-              </div>
-              <div className="space-y-1 text-[10px] text-mc-dim font-mono">
-                <div className="flex justify-between">
-                  <span>Input</span>
-                  <span className="text-mc-text">{tokenUsage.input.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Output</span>
-                  <span className="text-mc-text">{tokenUsage.output.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between pt-1" style={{ borderTop: '1px solid var(--mc-card-border)' }}>
-                  <span>Est. cost</span>
-                  <span className="text-mc-amber font-semibold">
-                    {(() => {
-                      const cost = (tokenUsage.input * 0.00025 + tokenUsage.output * 0.00125) / 1000;
-                      return cost < 0.001 ? '<$0.001' : `~$${cost.toFixed(3)}`;
-                    })()}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* Analyze All — sidebar trigger (visible when key set + failures exist) */}
           {apiKey.trim() && payload && payload.results.filter((r) => r.status === 'fail' || r.status === 'warning').length >= 2 && (
@@ -668,7 +599,6 @@ export default function App() {
                       result={r}
                       defaultOpen={r.status === 'fail' || r.status === 'warning'}
                       apiKey={apiKey}
-                      onTokensUsed={addTokens}
                     />
                   ))}
                 </div>

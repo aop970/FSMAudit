@@ -608,23 +608,37 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
     setShowAddForm(false);
   }
 
+  const [clearConfirm, setClearConfirm] = useState(false);
+
   function handleSave() {
     const ok = saveRulesSection('customRules', rules, prog);
     triggerSave(ok);
   }
 
   function handleReset() {
-    setRules(DEFAULT_RULES.customRules);
+    if (!clearConfirm) {
+      setClearConfirm(true);
+      setTimeout(() => setClearConfirm(false), 3000);
+      return;
+    }
+    setClearConfirm(false);
+    setRules([]);
     const ok = resetSection('customRules', prog);
     triggerSave(ok);
   }
 
   return (
     <div className="section-block">
-      <SectionHeader title="Custom Rules (Check 15)" dirty={isDirty} />
+      <div className="flex items-center gap-2 mb-3">
+        <h3 className="text-xs font-bold uppercase tracking-widest text-mc-dim">Custom Rules (Check 15)</h3>
+        {isDirty && <DirtyDot />}
+        {rules.length > 0 && !isDirty && (
+          <span className="text-[9px] text-mc-green font-medium">● auto-saved</span>
+        )}
+      </div>
       <p className="text-[10px] text-mc-dim mb-3">
         Define no-code audit constraints. Each enabled rule runs against FSM I + FSM II rows
-        in Check 15. Entry types are matched against the Comments column (case-insensitive).
+        in Check 15. Rules are auto-saved when added, toggled, or deleted.
       </p>
 
       {/* Rules table */}
@@ -774,7 +788,28 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
         </button>
       )}
 
-      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+      {/* Footer: Save unsaved edits + destructive clear */}
+      <div className="flex items-center gap-2 mt-3">
+        {isDirty && (
+          <button type="button" className={btnSave} onClick={handleSave}>
+            Save
+          </button>
+        )}
+        {rules.length > 0 && (
+          <button
+            type="button"
+            onClick={handleReset}
+            className={`px-3 py-1 rounded text-xs font-medium transition ${
+              clearConfirm
+                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/50'
+                : 'text-mc-dim border border-mc-card-border hover:border-rose-500/40 hover:text-rose-400'
+            }`}
+          >
+            {clearConfirm ? 'Tap again to confirm clear' : 'Clear All Rules'}
+          </button>
+        )}
+        <SaveFeedback state={saveState} />
+      </div>
     </div>
   );
 }

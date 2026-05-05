@@ -63,7 +63,7 @@ function buildSinglePayload(result: CheckResult): FailureSummary {
 export async function analyzeCheck(
   apiKey: string,
   result: CheckResult,
-): Promise<string> {
+): Promise<CallResult> {
   const payload = buildSinglePayload(result);
   return callClaude(apiKey, [payload]);
 }
@@ -78,7 +78,7 @@ export async function analyzeAllFailures(
   apiKey: string,
   results: CheckResult[],
   emails?: EmailEntry[],
-): Promise<string> {
+): Promise<CallResult> {
   const payloads = results
     .filter((r) => r.status === 'fail' || r.status === 'warning')
     .map(buildSinglePayload);
@@ -103,11 +103,17 @@ Body: ${e.body.slice(0, 800)}`).join('\n\n')}
 Based on these emails, identify any one-off instructions, exceptions, rate changes, employee-specific notes, or billing holds that are relevant to this invoice audit. List them as "One-Off Reminders" — not hard failures, but things to be aware of and verify manually. Format them as a bulleted list under a heading "📬 One-Off Reminders from Email Context".`;
 }
 
+export interface CallResult {
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 async function callClaude(
   apiKey: string,
   findings: FailureSummary[],
   emails?: EmailEntry[],
-): Promise<string> {
+): Promise<CallResult> {
   const rules = getAuditRules();
   const systemPrompt = rules.bragiSystemPrompt;
 
@@ -144,7 +150,12 @@ async function callClaude(
 
   const data = await response.json() as {
     content: { type: string; text: string }[];
+    usage?: { input_tokens: number; output_tokens: number };
   };
 
-  return data.content?.[0]?.text ?? '(No response from Bragi)';
+  return {
+    text: data.content?.[0]?.text ?? '(No response from Bragi)',
+    inputTokens: data.usage?.input_tokens ?? 0,
+    outputTokens: data.usage?.output_tokens ?? 0,
+  };
 }
