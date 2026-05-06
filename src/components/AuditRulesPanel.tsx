@@ -275,6 +275,72 @@ function HourlyRatesSection({
   );
 }
 
+// ── Section 2b: OT Hourly Rates ───────────────────────────────────────────────
+
+function OtHourlyRatesSection({ initial }: { initial: AuditRules['otHourlyRates'] }) {
+  const prog = useProgram();
+  const [fsmI, setFsmI] = useState(String(initial.fsmI));
+  const [fsmII, setFsmII] = useState(String(initial.fsmII));
+  const [saveState, triggerSave] = useSaveState();
+
+  const isDirty =
+    parseFloat(fsmI) !== initial.fsmI || parseFloat(fsmII) !== initial.fsmII;
+
+  function handleSave() {
+    const ok = saveRulesSection('otHourlyRates', {
+      fsmI: parseFloat(fsmI) || 0,
+      fsmII: parseFloat(fsmII) || 0,
+    }, prog);
+    triggerSave(ok);
+  }
+
+  function handleReset() {
+    setFsmI(String(DEFAULT_RULES.otHourlyRates.fsmI));
+    setFsmII(String(DEFAULT_RULES.otHourlyRates.fsmII));
+    const ok = resetSection('otHourlyRates', prog);
+    triggerSave(ok);
+  }
+
+  return (
+    <div className="section-block">
+      <SectionHeader title="OT Hourly Rates" dirty={isDirty} />
+      <p className="text-[10px] text-mc-dim mb-2">
+        Expected billing rates for Over Time rows (non-CA). Set to 0 to skip OT billing validation.
+        Check 01 uses these rates to verify OT bill and markup calculations.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="text-[11px] text-mc-dim mb-1 block">FSM I OT Rate ($/hr)</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={fsmI}
+            onChange={(e) => setFsmI(e.target.value)}
+            className={inputCls}
+            style={inputStyle}
+            placeholder="0 = disabled"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[11px] text-mc-dim mb-1 block">FSM II OT Rate ($/hr)</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={fsmII}
+            onChange={(e) => setFsmII(e.target.value)}
+            className={inputCls}
+            style={inputStyle}
+            placeholder="0 = disabled"
+          />
+        </label>
+      </div>
+      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+    </div>
+  );
+}
+
 // ── Section 3: Punch Categories (was 2) ───────────────────────────────────────
 
 function PunchCategoriesSection({ initial }: { initial: AuditRules['punchCategories'] }) {
@@ -910,6 +976,7 @@ export function AuditRulesPanel({
         <ProgramCtx.Provider value={program}>
         <MarkupRatesSection initial={rules.markupRates} />
         {program === 'fsm' && <HourlyRatesSection initial={rules.hourlyRates} program={program} />}
+        {program === 'fsm' && <OtHourlyRatesSection initial={rules.otHourlyRates} />}
         <PunchCategoriesSection initial={rules.punchCategories} />
         <OtThresholdSection initial={rules.otThreshold} />
         <ToleranceSection initial={rules.tolerances} />

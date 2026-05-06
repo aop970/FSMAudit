@@ -24,6 +24,10 @@ export interface AuditRules {
     fsmI: number;   // $/hr base rate for FSM I rows; 0 = not configured (skip check)
     fsmII: number;  // $/hr base rate for FSM II rows; 0 = not configured (skip check)
   };
+  otHourlyRates: {
+    fsmI: number;   // $/hr OT rate for FSM I rows (typically half of fsmI); 0 = skip check
+    fsmII: number;  // $/hr OT rate for FSM II rows; 0 = skip check
+  };
   punchCategories: {
     supported: string[];  // default: Work, Travel, Admin, Training, Meeting, Break
     exceptions: string[]; // default: Time Off, Paid Holiday, Termed PTO, Over Time
@@ -48,6 +52,10 @@ export const DEFAULT_RULES: AuditRules = {
     pt: 0.2770,
   },
   hourlyRates: {
+    fsmI: 0,
+    fsmII: 0,
+  },
+  otHourlyRates: {
     fsmI: 0,
     fsmII: 0,
   },
@@ -86,6 +94,7 @@ export const DEFAULT_RULES: AuditRules = {
 export const DEFAULT_SES_RULES: AuditRules = {
   markupRates: { ft: 0.2993, pt: 0.2770 },
   hourlyRates: { fsmI: 0, fsmII: 0 },
+  otHourlyRates: { fsmI: 0, fsmII: 0 },
   punchCategories: {
     supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
     exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Over Time'],
@@ -116,6 +125,7 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
   return {
     markupRates: { ...defaults.markupRates, ...(stored.markupRates ?? {}) },
     hourlyRates: { ...defaults.hourlyRates, ...(stored.hourlyRates ?? {}) },
+    otHourlyRates: { ...defaults.otHourlyRates, ...(stored.otHourlyRates ?? {}) },
     punchCategories: {
       supported: stored.punchCategories?.supported ?? defaults.punchCategories.supported,
       exceptions: stored.punchCategories?.exceptions ?? defaults.punchCategories.exceptions,
