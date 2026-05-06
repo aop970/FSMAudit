@@ -1,6 +1,7 @@
 // Check 1 — Labor Billing Validation
 // FT: Markup = Base × rules.markupRates.ft | PT: Markup = Base × rules.markupRates.pt | else: 0
 // Loaded Rate = Base + Markup; Total Bill = Loaded Rate × Time Hours
+// OT rows (non-CA): effectiveBase = Base / 2 before applying markup and bill calculation
 // Tolerance ≤ rules.tolerances.dollar per row
 // If hourlyRates.fsmI/fsmII are set (> 0), also validates base pay rate against expected rate.
 
@@ -22,12 +23,16 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
   for (const r of all) {
     if (r.timeHours === 0 && r.basePayRate === 0) continue;
     const type = r.associateType.toUpperCase().trim();
+    const isOT = /over.?time/i.test(r.comments);
+    const isCA = /^ca$/i.test(r.associateState.trim()) || /california/i.test(r.associateState);
+    // OT rows (non-CA) are billed at half the base rate
+    const effectiveBase = (isOT && !isCA) ? r.basePayRate / 2 : r.basePayRate;
     const mu = type === 'FT'
-      ? r.basePayRate * ftRate
+      ? effectiveBase * ftRate
       : type === 'PT'
-        ? r.basePayRate * ptRate
+        ? effectiveBase * ptRate
         : 0;
-    const loaded = r.basePayRate + mu;
+    const loaded = effectiveBase + mu;
     const bill   = loaded * r.timeHours;
 
     const billOk = Math.abs(bill - r.billValue) <= dollarTol;
@@ -35,7 +40,6 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
 
     // Hourly rate validation — only when configured (> 0) and row has a non-zero base rate.
     // OT rows are intentionally billed at half the base rate — skip the rate check for them.
-    const isOT = /over.?time/i.test(r.comments);
     const expectedRate = r.sheet === 'FSM I' ? expectedRateI : expectedRateII;
     const rateOk = expectedRate === 0 || r.basePayRate === 0 || isOT
       ? true
