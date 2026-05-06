@@ -111,11 +111,14 @@ export function check15CustomRules(fsmI: LaborRow[], fsmII: LaborRow[]): CheckRe
   }, 0);
 
   const pass = failures.length === 0;
+  const statsStr = totalCandidates === 0
+    ? `${enabledRules.length} rule${enabledRules.length === 1 ? '' : 's'} evaluated — no rows matched entry type filter`
+    : `${enabledRules.length} rule${enabledRules.length === 1 ? '' : 's'} evaluated, ${totalCandidates} row${totalCandidates === 1 ? '' : 's'} tested, ${failures.length} violation${failures.length === 1 ? '' : 's'}`;
   return {
     checkId: 15,
     checkName: 'Custom Rules',
-    status: pass ? 'pass' : 'fail',
-    stats: `${enabledRules.length} rule${enabledRules.length === 1 ? '' : 's'} evaluated, ${totalCandidates} row${totalCandidates === 1 ? '' : 's'} tested, ${failures.length} violation${failures.length === 1 ? '' : 's'}`,
+    status: totalCandidates === 0 ? 'na' : pass ? 'pass' : 'fail',
+    stats: statsStr,
     flaggedCount: failures.length,
     flaggedRows: failures.slice(0, 200),
   };

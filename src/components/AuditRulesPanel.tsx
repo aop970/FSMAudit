@@ -807,7 +807,7 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
             </select>
           </label>
           <label className="block">
-            <span className="text-[11px] text-mc-dim mb-1 block">State Filter (optional — substring match on Comments)</span>
+            <span className="text-[11px] text-mc-dim mb-1 block">State Filter (optional — substring match on Associate State column)</span>
             <input
               type="text"
               value={newStateFilter}
