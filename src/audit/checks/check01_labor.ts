@@ -1,7 +1,9 @@
 // Check 1 — Labor Billing Validation
 // FT: Markup = Base × rules.markupRates.ft | PT: Markup = Base × rules.markupRates.pt | else: 0
 // Loaded Rate = Base + Markup; Total Bill = Loaded Rate × Time Hours
-// OT rows (non-CA): effectiveBase = otHourlyRates.fsmI/II (from settings); bill/markup checked against that
+// OT billing (effectiveBase = otHourlyRates.fsmI/II) applies to:
+//   • "Over Time" rows for non-CA associates
+//   • "CA Daily OT" rows (always — this type is always billed at OT rate)
 // Tolerance ≤ rules.tolerances.dollar per row
 // If hourlyRates.fsmI/fsmII are set (> 0), validates base pay rate for non-OT rows.
 
@@ -25,14 +27,16 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
   for (const r of all) {
     if (r.timeHours === 0 && r.basePayRate === 0) continue;
     const type = r.associateType.toUpperCase().trim();
-    const isOT = /over.?time/i.test(r.comments);
+    const isOverTime  = /over.?time/i.test(r.comments);
+    const isCADailyOT = /ca\s*daily\s*ot/i.test(r.comments);
     const isCA = /^ca$/i.test(r.associateState.trim()) || /california/i.test(r.associateState);
 
-    // For OT rows (non-CA): use the configured OT rate as effective billing rate.
-    // The spreadsheet stores the full base rate; OT billing uses a separate lower rate.
+    // CA Daily OT always gets OT billing; regular Over Time gets OT billing only for non-CA.
+    const useOtBilling = isCADailyOT || (isOverTime && !isCA);
+    const isAnyOT = isOverTime || isCADailyOT; // used to skip rate check
+
     const otRate = r.sheet === 'FSM I' ? otRateI : otRateII;
-    const useOtRate = isOT && !isCA && otRate > 0;
-    const effectiveBase = useOtRate ? otRate : r.basePayRate;
+    const effectiveBase = (useOtBilling && otRate > 0) ? otRate : r.basePayRate;
 
     const mu = type === 'FT'
       ? effectiveBase * ftRate
@@ -48,7 +52,7 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
     // Hourly rate validation — only for non-OT rows (OT rows store full base rate in
     // the spreadsheet but bill at the OT rate, so the rate check is skipped for them).
     const expectedRate = r.sheet === 'FSM I' ? expectedRateI : expectedRateII;
-    const rateOk = expectedRate === 0 || r.basePayRate === 0 || isOT
+    const rateOk = expectedRate === 0 || r.basePayRate === 0 || isAnyOT
       ? true
       : Math.abs(r.basePayRate - expectedRate) <= dollarTol;
 

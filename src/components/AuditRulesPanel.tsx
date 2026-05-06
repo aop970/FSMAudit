@@ -305,7 +305,7 @@ function OtHourlyRatesSection({ initial }: { initial: AuditRules['otHourlyRates'
     <div className="section-block">
       <SectionHeader title="OT Hourly Rates" dirty={isDirty} />
       <p className="text-[10px] text-mc-dim mb-2">
-        Expected billing rates for Over Time rows (non-CA). Set to 0 to skip OT billing validation.
+        Expected billing rates for Over Time (non-CA) and CA Daily OT rows. Set to 0 to skip OT billing validation.
         Check 01 uses these rates to verify OT bill and markup calculations.
       </p>
       <div className="grid grid-cols-2 gap-3">
