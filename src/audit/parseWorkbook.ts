@@ -378,7 +378,7 @@ async function parsePunchCSV(file: File): Promise<PunchRow[]> {
           const timeIn  = parseTimeValue(timeInRaw);
           const timeOut = parseTimeValue(timeOutRaw);
 
-          const visitDateRaw = r['Visit Date'] ?? r['visit date'] ?? r['Date'] ?? '';
+          const visitDateRaw = r['Visit Date'] ?? r['visit date'] ?? r['Date'] ?? r['Date In'] ?? r['date in'] ?? '';
 
           rows.push({
             rowNum: i + 2, // 1-indexed, accounting for header
@@ -387,7 +387,7 @@ async function parsePunchCSV(file: File): Promise<PunchRow[]> {
             timeIn,
             timeOut,
             timeHours: toNum(r['Time Hours'] ?? r['time hours'] ?? '0'),
-            comments: toStr(r['Comments'] ?? r['comments'] ?? ''),
+            comments: toStr(r['Comments'] ?? r['comments'] ?? r['Time Type'] ?? r['time type'] ?? ''),
             visitDate: visitDateRaw ? parseDate(visitDateRaw) : null,
             week: (() => {
               const w = r['Week'] ?? r['week'] ?? '';
