@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "true",
+            "description": "N/A — no backend server process to restart. This is a purely static SPA (React + Vite). Vite's HMR handles client-side hot reload automatically during dev; no server restart is needed or appropriate. In production, Railway auto-deploys on push to main and runs 'serve -s dist' (a static file server with no stateful process that needs restarting). If a backend is ever added, replace this with: pkill -f 'node.*server' || true && npm run server &"
+          }
+        ]
+      }
+    ]
+  }
+}
