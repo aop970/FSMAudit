@@ -584,6 +584,11 @@ export async function parseTimeOffFile(file: File): Promise<TimeOffRow[]> {
   const out: TimeOffRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
+
+    // Column A (index 0) holds the program code ("FSM", "FSM II", "FSM II Street", etc.).
+    // Rows for employees outside this program return #N/A from the lookup formula — skip them.
+    if (!toStr(row[0]).toUpperCase().startsWith('FSM')) continue;
+
     const status = toStr(row[cStatus]);
     if (status.toLowerCase() !== 'approved') continue;
 
