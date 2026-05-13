@@ -11,11 +11,12 @@ interface AnalyzeAllButtonProps {
   state: AnalyzeAllState;
   output: string;
   errMsg: string;
+  progress?: string;
   onRun: () => void;
   onClear: () => void;
 }
 
-export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, onRun, onClear }: AnalyzeAllButtonProps) {
+export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progress, onRun, onClear }: AnalyzeAllButtonProps) {
   const failures = results.filter((r) => r.status === 'fail' || r.status === 'warning');
   if (failures.length < 2 || !apiKey.trim()) return null;
 
@@ -42,9 +43,14 @@ export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, onRun
           </button>
         )}
         {state === 'loading' && (
-          <div className="flex items-center gap-2 text-sm text-mc-blue">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Asking Bragi…
+          <div className="space-y-1 text-right">
+            <div className="flex items-center gap-2 text-sm text-mc-blue">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Asking Bragi…
+            </div>
+            {progress && (
+              <p className="text-xs text-mc-dim">{progress}</p>
+            )}
           </div>
         )}
         {state === 'error' && (

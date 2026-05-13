@@ -9,6 +9,7 @@ import { CheckCard } from './components/CheckCard';
 import { SummaryStrip } from './components/SummaryStrip';
 import { AnalyzeAllButton } from './components/AnalyzeAllButton';
 import { DownloadReport } from './components/DownloadReport';
+import { DownloadPDF } from './components/DownloadPDF';
 import { AuditRulesPanel } from './components/AuditRulesPanel';
 import {
   loadControlTable,
@@ -20,8 +21,8 @@ import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile, 
 import { runAudit } from './audit/runAudit';
 import { runSesAudit } from './audit/runSesAudit';
 import { getAuditRules } from './audit/auditRules';
-import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow } from './audit/types';
-import { analyzeAllFailures } from './ai/bragiClient';
+import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow, ParsedData } from './audit/types';
+import { runTieredAnalysis } from './ai/bragiClient';
 import type { EmailEntry } from './ai/bragiClient';
 import type { AnalyzeAllState } from './components/AnalyzeAllButton';
 
@@ -89,6 +90,7 @@ export default function App() {
   const [statusMsg, setStatusMsg]     = useState('');
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
   const [payload, setPayload]         = useState<AuditPayload | null>(null);
+  const [parsedData, setParsedData]   = useState<ParsedData | null>(null);
 
   // Control tables
   const [controlTable, setControlTable] = useState<ControlTableEntry[]>(() => loadControlTable());
@@ -117,23 +119,27 @@ export default function App() {
   }, [apiKey]);
 
   // Analyze All state (lifted so sidebar button can trigger it)
-  const [aaState, setAaState]         = useState<AnalyzeAllState>('idle');
-  const [aaOutput, setAaOutput]       = useState('');
-  const [aaError, setAaError]         = useState('');
+  const [aaState, setAaState]           = useState<AnalyzeAllState>('idle');
+  const [aaOutput, setAaOutput]         = useState('');
+  const [aaError, setAaError]           = useState('');
+  const [aaProgress, setAaProgress]     = useState('');
 
   async function runAnalyzeAll() {
     if (!payload || !apiKey.trim()) return;
     setAaState('loading');
     setAaError('');
+    setAaProgress('');
     try {
-      const { text, inputTokens, outputTokens } = await analyzeAllFailures(
+      const tiered = await runTieredAnalysis(
         apiKey,
         payload.results,
-        emailEntries.length > 0 ? emailEntries : undefined,
+        parsedData,
+        program,
+        (msg) => setAaProgress(msg),
       );
-      setAaOutput(text);
+      setAaOutput(tiered.reportMarkdown);
       setAaState('done');
-      addTokens(inputTokens, outputTokens);
+      addTokens(tiered.totalInputTokens, tiered.totalOutputTokens);
     } catch (err) {
       setAaError(err instanceof Error ? err.message : String(err));
       setAaState('error');
@@ -144,6 +150,7 @@ export default function App() {
     setAaState('idle');
     setAaOutput('');
     setAaError('');
+    setAaProgress('');
   }
 
   // Audit rules panel
@@ -244,6 +251,7 @@ export default function App() {
 
         const result = runSesAudit(parsed, sesControlTable);
         setPayload(result);
+        setParsedData(parsed);
         setAppState('done');
         setStatusMsg('');
       } else {
@@ -279,6 +287,7 @@ export default function App() {
 
         const result = runAudit(parsed, controlTable);
         setPayload(result);
+        setParsedData(parsed);
         setAppState('done');
         setStatusMsg('');
       }
@@ -304,6 +313,7 @@ export default function App() {
     setEmailEntries([]);
     setEmailParseError(null);
     setPayload(null);
+    setParsedData(null);
     setAppState('idle');
     setErrorMsg(null);
     setStatusMsg('');
@@ -557,9 +567,14 @@ export default function App() {
                 </button>
               )}
               {aaState === 'loading' && (
-                <div className="flex items-center justify-center gap-1.5 py-1 text-xs text-mc-blue">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Asking Bragi…
+                <div className="space-y-1">
+                  <div className="flex items-center justify-center gap-1.5 py-1 text-xs text-mc-blue">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Asking Bragi…
+                  </div>
+                  {aaProgress && (
+                    <p className="text-center text-[10px] text-mc-dim">{aaProgress}</p>
+                  )}
                 </div>
               )}
               {aaState === 'done' && (
@@ -654,6 +669,7 @@ export default function App() {
                 state={aaState}
                 output={aaOutput}
                 errMsg={aaError}
+                progress={aaProgress}
                 onRun={runAnalyzeAll}
                 onClear={clearAnalyzeAll}
               />
@@ -666,8 +682,10 @@ export default function App() {
                     <CheckCard
                       key={r.checkId}
                       result={r}
+                      allResults={payload.results}
                       defaultOpen={r.status === 'fail' || r.status === 'warning'}
                       apiKey={apiKey}
+                      program={program}
                       onTokensUsed={addTokens}
                     />
                   ))}
@@ -685,8 +703,9 @@ export default function App() {
               )}
 
               {/* Download */}
-              <div className="flex justify-end pb-6">
+              <div className="flex justify-end gap-2 pb-6">
                 <DownloadReport payload={payload} />
+                <DownloadPDF payload={payload} />
               </div>
             </>
           )}
@@ -753,9 +772,11 @@ export default function App() {
 
           <div className="mt-auto pt-4" style={{ borderTop: '1px solid var(--mc-card-border)' }}>
             <p className="text-[10px] text-mc-dim leading-relaxed">
-              Tier 1: 9 deterministic checks run instantly client-side.
+              Deterministic checks run instantly client-side.
               <br /><br />
-              Tier 2: Bragi Analysis on demand via claude-haiku-3-5. Requires API key.
+              <span className="text-mc-blue">Analyze All</span> — Haiku quick scan → Sonnet synthesis report.
+              <br /><br />
+              <span className="text-mc-amber">Deep Dive</span> — Sonnet full context bundle per check, on demand.
             </p>
           </div>
         </aside>

@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
-import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2 } from 'lucide-react';
+import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, ZoomIn } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CheckResult, CheckStatus } from '../audit/types';
-import { estimateCost, estimateTokens, analyzeCheck } from '../ai/bragiClient';
+import { estimateCost, estimateTokens, analyzeCheck, runDeepDive } from '../ai/bragiClient';
 
 interface CheckCardProps {
   result: CheckResult;
+  allResults?: CheckResult[];
   defaultOpen?: boolean;
   apiKey: string;
+  program?: 'fsm' | 'ses';
   onTokensUsed?: (inputTokens: number, outputTokens: number) => void;
+  // External AI output can be injected from the synthesis pass
+  externalAiOutput?: string;
 }
 
 const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label: string; icon: React.ReactNode }> = {
@@ -39,16 +43,26 @@ const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label
   },
 };
 
-export function CheckCard({ result, defaultOpen = false, apiKey, onTokensUsed }: CheckCardProps) {
+export function CheckCard({ result, allResults, defaultOpen = false, apiKey, program, onTokensUsed, externalAiOutput }: CheckCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [aiState, setAiState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [aiOutput, setAiOutput] = useState('');
   const [aiError, setAiError] = useState('');
+  // Deep Dive state
+  const [ddState, setDdState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [ddOutput, setDdOutput] = useState('');
+  const [ddError, setDdError] = useState('');
   const s = STATUS_STYLES[result.status];
 
   const showBragiButton = (result.status === 'fail' || result.status === 'warning') && apiKey.trim();
   const costEst = showBragiButton ? estimateCost(result) : '';
   const tokenEst = showBragiButton ? estimateTokens(result) : 0;
+
+  // Show the deep dive button when: fail/warn + API key + has flagged rows with associateId
+  const hasAssociates = result.flaggedRows.some(
+    (r) => r['associateId'] || r['Associate ID'] || r['associate_id'] || r['AssociateID'],
+  );
+  const showDeepDive = showBragiButton && hasAssociates && allResults && allResults.length > 0;
 
   async function handleAnalyze() {
     setAiState('loading');
@@ -61,6 +75,27 @@ export function CheckCard({ result, defaultOpen = false, apiKey, onTokensUsed }:
     } catch (err) {
       setAiError(err instanceof Error ? err.message : String(err));
       setAiState('error');
+    }
+  }
+
+  async function handleDeepDive() {
+    if (!allResults) return;
+    setDdState('loading');
+    setDdError('');
+    try {
+      const { text, inputTokens, outputTokens } = await runDeepDive(
+        apiKey,
+        result,
+        allResults,
+        program,
+        () => { /* progress handled inline */ },
+      );
+      setDdOutput(text);
+      setDdState('done');
+      onTokensUsed?.(inputTokens, outputTokens);
+    } catch (err) {
+      setDdError(err instanceof Error ? err.message : String(err));
+      setDdState('error');
     }
   }
 
@@ -142,8 +177,8 @@ export function CheckCard({ result, defaultOpen = false, apiKey, onTokensUsed }:
             </div>
           )}
 
-          {/* Bragi Analysis button */}
-          {showBragiButton && (
+          {/* Bragi Analysis — quick Haiku analyze button (shown when no external AI output) */}
+          {showBragiButton && !externalAiOutput && (
             <div className="space-y-3">
               {aiState === 'idle' && (
                 <button
@@ -198,6 +233,72 @@ export function CheckCard({ result, defaultOpen = false, apiKey, onTokensUsed }:
                     type="button"
                     onClick={() => { setAiState('idle'); setAiOutput(''); }}
                     className="mt-2 text-[10px] text-mc-dim hover:text-mc-blue"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Deep Dive button — Sonnet full context bundle */}
+          {showDeepDive && (
+            <div className="space-y-3">
+              {ddState === 'idle' && (
+                <button
+                  type="button"
+                  onClick={handleDeepDive}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+                  style={{
+                    border: '1px solid rgba(255,186,8,0.4)',
+                    backgroundColor: 'rgba(255,186,8,0.06)',
+                    color: '#ffba08',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,186,8,0.12)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,186,8,0.06)')}
+                >
+                  <ZoomIn className="h-3.5 w-3.5" />
+                  Deep Dive
+                  <span className="ml-1 text-[10px] opacity-70">Sonnet · full context</span>
+                </button>
+              )}
+
+              {ddState === 'loading' && (
+                <div className="flex items-center gap-2 text-xs text-mc-amber">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Running deep dive on {result.checkName}…
+                </div>
+              )}
+
+              {ddState === 'error' && (
+                <div className="space-y-2">
+                  <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">
+                    {ddError}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDeepDive}
+                    className="text-xs text-mc-blue hover:underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {ddState === 'done' && ddOutput && (
+                <div className="rounded-lg border p-4" style={{ borderColor: 'rgba(255,186,8,0.3)', backgroundColor: 'rgba(255,186,8,0.05)' }}>
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <ZoomIn className="h-3.5 w-3.5 text-mc-amber" />
+                    <span className="text-xs font-semibold text-mc-text">Deep Dive — Sonnet Analysis</span>
+                    <span className="ml-auto text-[10px] text-mc-dim">advisory — rule-based checks are authoritative</span>
+                  </div>
+                  <div className="prose">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{ddOutput}</ReactMarkdown>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setDdState('idle'); setDdOutput(''); }}
+                    className="mt-2 text-[10px] text-mc-dim hover:text-mc-amber"
                   >
                     Clear
                   </button>
