@@ -279,7 +279,7 @@ export default function App() {
           parsed.termedPtoRows = termedRows;
         }
 
-        setStatusMsg('Running 15 audit checks…');
+        setStatusMsg('Running 16 audit checks…');
         setAppState('auditing');
 
         // Yield to event loop so UI updates

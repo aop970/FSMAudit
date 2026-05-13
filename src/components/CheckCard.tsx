@@ -58,11 +58,10 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   const costEst = showBragiButton ? estimateCost(result) : '';
   const tokenEst = showBragiButton ? estimateTokens(result) : 0;
 
-  // Show the deep dive button when: fail/warn + API key + has flagged rows with associateId
-  const hasAssociates = result.flaggedRows.some(
-    (r) => r['associateId'] || r['Associate ID'] || r['associate_id'] || r['AssociateID'],
-  );
-  const showDeepDive = showBragiButton && hasAssociates && allResults && allResults.length > 0;
+  // Only checks 3, 5, and 7 warrant the full Sonnet Deep Dive treatment.
+  // All other failed/warned checks receive Haiku analysis only.
+  const DEEP_DIVE_CHECKS = new Set([3, 5, 7]);
+  const showDeepDive = showBragiButton && DEEP_DIVE_CHECKS.has(result.checkId) && allResults && allResults.length > 0;
 
   async function handleAnalyze() {
     setAiState('loading');
