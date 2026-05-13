@@ -106,6 +106,25 @@ export function check06Cloud(cloudRows: CloudRow[], mgmtRows: MgmtRow[]): CheckR
     }
   }
 
+  // Every manager in the management table must have a row on the Cloud Services tab
+  const cloudMgrIds = new Set(
+    cloudRows
+      .filter((r) => r.licenseType.toLowerCase().includes('manager'))
+      .map((r) => r.associateId.toUpperCase()),
+  );
+  for (const [id, alloc] of mgmtAllocMap) {
+    if (!cloudMgrIds.has(id)) {
+      const mgmtRow = mgmtRows.find((m) => m.associateId.toUpperCase() === id);
+      failures.push({
+        name: mgmtRow?.name ?? id,
+        id,
+        licenseType: 'Cloud Services Manager',
+        expectedAlloc: (alloc * 100).toFixed(2) + '%',
+        issue: 'Manager present in Management Detail Hours but missing from Cloud Services tab',
+      });
+    }
+  }
+
   const managerCount  = cloudRows.filter((r) => r.licenseType.toLowerCase().includes('manager')).length;
   const standardCount = cloudRows.length - managerCount;
   const pass = failures.length === 0;
