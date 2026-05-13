@@ -59,6 +59,7 @@ export interface CloudRow {
   rowNum: number;
   associateName: string;
   associateId: string;
+  licenseType: string;
   quantity: number | null;
   rate: number;
   allocation: number;

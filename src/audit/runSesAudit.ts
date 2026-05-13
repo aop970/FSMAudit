@@ -80,7 +80,7 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     check03SesThreeWayRecon(parsed.fsmIRows, parsed.sesPunchRows, parsed.shiftRows),
     check04PunchIntegrity(parsed.punchRows),
     check05Management(parsed.mgmtRows, controlMap),
-    check06Cloud(parsed.cloudRows),
+    check06Cloud(parsed.cloudRows, parsed.mgmtRows),
     check07SesOt,
     check08SesRoster,
     check09TieOut(parsed.tieOutData),

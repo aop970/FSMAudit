@@ -207,6 +207,8 @@ function parseCloudSheet(ws: XLSX.WorkSheet): CloudRow[] {
     return b ? headers.indexOf(b.toLowerCase()) : -1;
   };
 
+  const cLicenseType = col('type of license');
+
   const out: CloudRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
@@ -218,9 +220,12 @@ function parseCloudSheet(ws: XLSX.WorkSheet): CloudRow[] {
       rowNum: i + 1,
       associateName: name,
       associateId: toStr(row[col('associate id')]),
+      licenseType: cLicenseType >= 0 ? toStr(row[cLicenseType]) : '',
       quantity: qtyRaw == null || qtyRaw === '' ? null : toNum(qtyRaw),
       rate: toNum(row[col('rate')]),
-      allocation: toPct(row[col('allocation')]),
+      // Allocation is a percentage cell — Excel already stores it as a decimal (0.37 = 37%).
+      // Use toNum (not toPct) so values > 1 (e.g. 137% stored as 1.37) are preserved as-is.
+      allocation: toNum(row[col('allocation')]),
       amount: toNum(row[col('sum of amount', 'amount')]),
     });
   }

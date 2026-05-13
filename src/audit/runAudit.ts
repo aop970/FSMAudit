@@ -45,7 +45,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check03PunchRecon(parsed.fsmIRows, parsed.fsmIIRows, parsed.punchRows),
     check04PunchIntegrity(parsed.punchRows),
     check05Management(parsed.mgmtRows, controlMap),
-    check06Cloud(parsed.cloudRows),
+    check06Cloud(parsed.cloudRows, parsed.mgmtRows),
     check07OtApproval(parsed.fsmIRows, parsed.fsmIIRows, parsed.otApprovalRows),
     check08Roster(parsed.fsmIRows, parsed.fsmIIRows, parsed.rosterEntries),
     check09TieOut(parsed.tieOutData),
