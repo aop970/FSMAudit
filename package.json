@@ -11,6 +11,8 @@
     "start": "npx serve -s dist --listen $PORT"
   },
   "dependencies": {
+    "@azure/msal-browser": "^5.10.1",
+    "@azure/msal-react": "^5.4.1",
     "lucide-react": "^1.11.0",
     "papaparse": "^5.5.3",
     "pdfmake": "^0.3.8",
