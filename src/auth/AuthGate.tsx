@@ -16,8 +16,7 @@ export function AuthGate({ children }: AuthGateProps) {
 
   async function handleSignIn() {
     try {
-      const result = await instance.loginPopup(loginRequest);
-      instance.setActiveAccount(result.account);
+      await instance.loginRedirect(loginRequest);
     } catch (err) {
       console.error('Sign-in failed:', err);
     }
