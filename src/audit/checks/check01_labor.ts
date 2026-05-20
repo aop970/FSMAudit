@@ -2,7 +2,7 @@
 // FT: Markup = Base × rules.markupRates.ft | PT: Markup = Base × rules.markupRates.pt | else: 0
 // Loaded Rate = Base + Markup; Total Bill = Loaded Rate × Time Hours
 // OT billing (effectiveBase = otHourlyRates.fsmI/II) applies to:
-//   • "Over Time" rows for non-CA associates
+//   • "Overtime" rows for non-CA associates (note: "Over Time" is normalized at parse time)
 //   • "CA Daily OT" rows (always — this type is always billed at OT rate)
 // Tolerance ≤ rules.tolerances.dollar per row
 // If hourlyRates.fsmI/fsmII are set (> 0), validates base pay rate for non-OT rows.
@@ -27,7 +27,7 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
   for (const r of all) {
     if (r.timeHours === 0 && r.basePayRate === 0) continue;
     const type = r.associateType.toUpperCase().trim();
-    const isOverTime  = /over.?time/i.test(r.comments);
+    const isOverTime  = /overtime/i.test(r.comments);
     const isCADailyOT = /ca\s*daily\s*ot/i.test(r.comments);
     const isCA = /^ca$/i.test(r.associateState.trim()) || /california/i.test(r.associateState);
 

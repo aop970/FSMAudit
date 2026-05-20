@@ -126,6 +126,13 @@ function parseLaborSheet(label: string, ws: XLSX.WorkSheet): LaborRow[] {
     const muFormula   = cMu   >= 0 ? getCellFormula(ws, i, cMu)   : undefined;
     const billFormula = cBill >= 0 ? getCellFormula(ws, i, cBill)  : undefined;
 
+    const rawComments = toStr(row[cCmt]);
+    // Normalize legacy two-word "Over Time" → "Overtime" at parse time.
+    // All downstream logic uses the single label "Overtime".
+    const normalizedComments = /^over\s+time$/i.test(rawComments.trim())
+      ? 'Overtime'
+      : rawComments;
+
     out.push({
       sheet: label,
       rowNum: i + 1,
@@ -140,7 +147,7 @@ function parseLaborSheet(label: string, ws: XLSX.WorkSheet): LaborRow[] {
       billFormula,
       loadedRate:     toNum(row[cLoaded]),
       associateState: cState >= 0 ? toStr(row[cState]) : '',
-      comments:       toStr(row[cCmt]),
+      comments:       normalizedComments,
       visitDate:      toDate(row[cDate]),
       week: cWeek >= 0 && row[cWeek] != null ? (toNum(row[cWeek]) || null) : null,
       clientStoreId: cStoreId >= 0 ? toStr(row[cStoreId]) : '',
@@ -823,13 +830,19 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
     const name = cName >= 0 ? toStr(row[cName]) : '';
     const id   = cId   >= 0 ? toStr(row[cId])   : '';
     if (!name && !id) continue;
+    const rawTimeType = cType >= 0 ? toStr(row[cType]) : '';
+    // Normalize legacy two-word "Over Time" → "Overtime" at parse time.
+    const normalizedTimeType = rawTimeType && /^over\s+time$/i.test(rawTimeType.trim())
+      ? 'Overtime'
+      : rawTimeType || undefined;
+
     out.push({
       rowNum: i + 1,
       employeeName: name,
       associateId: id,
       timeHours: cHrs >= 0 ? toNum(row[cHrs]) : 0,
       payrollTag: cTag >= 0 ? toStr(row[cTag]) || undefined : undefined,
-      timeType:   cType >= 0 ? toStr(row[cType]) || undefined : undefined,
+      timeType:   normalizedTimeType,
     });
   }
   return out;

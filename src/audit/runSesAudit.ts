@@ -18,6 +18,7 @@ import { check15CustomRules } from './checks/check15_customRules';
 import { checkSes2020co } from './checks/checkSes_2020co';
 import { checkSesStoreIdFormat } from './checks/checkSes_storeIdFormat';
 import { checkSesPayrollTag } from './checks/checkSes_payrollTag';
+import { check17OtMath } from './checks/check17_otMath';
 import { getAuditRules } from './auditRules';
 
 function fmtDate(d: Date): string {
@@ -40,10 +41,11 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
   for (const r of laborRows) if (r.associateId) uniqueIds.add(r.associateId);
 
   // Check 7 — SES OT Flag (inline; no OT Approval tab)
+  // Note: "Over Time" (two words) is normalized to "Overtime" at parse time.
   const check07SesOt: CheckResult = (() => {
     const otRows = laborRows.filter((r) => {
       const c = r.comments.toLowerCase();
-      return (c.includes('over time') || c.includes('overtime')) && r.timeHours > rules.otThreshold;
+      return c.includes('overtime') && r.timeHours > rules.otThreshold;
     });
     return {
       checkId: 7,
@@ -97,6 +99,7 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     checkSes2020co(parsed.fsmIRows),
     checkSesStoreIdFormat(parsed.fsmIRows),
     checkSesPayrollTag(parsed.sesPunchRows, parsed.declaredPeriod),
+    check17OtMath(parsed.fsmIRows, parsed.fsmIIRows),
   ];
 
   const period = parsed.declaredPeriod

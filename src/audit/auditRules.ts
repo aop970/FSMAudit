@@ -30,7 +30,7 @@ export interface AuditRules {
   };
   punchCategories: {
     supported: string[];  // default: Work, Travel, Admin, Training, Meeting, Break
-    exceptions: string[]; // default: Time Off, Paid Holiday, Termed PTO, Over Time
+    exceptions: string[]; // default: Time Off, Paid Holiday, Termed PTO, Overtime
   };
   otThreshold: number;         // default 3.99 (hours > this value)
   tolerances: {
@@ -61,7 +61,7 @@ export const DEFAULT_RULES: AuditRules = {
   },
   punchCategories: {
     supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
-    exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Over Time'],
+    exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Overtime'],
   },
   otThreshold: 3.99,
   tolerances: {
@@ -97,7 +97,7 @@ export const DEFAULT_SES_RULES: AuditRules = {
   otHourlyRates: { fsmI: 0, fsmII: 0 },
   punchCategories: {
     supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
-    exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Over Time'],
+    exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Overtime'],
   },
   otThreshold: 3.99,
   tolerances: { dollar: 0.01, hours: 0.01 },

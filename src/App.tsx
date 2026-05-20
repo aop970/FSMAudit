@@ -245,7 +245,7 @@ export default function App() {
           parsed.termedPtoRows = termedRows;
         }
 
-        setStatusMsg('Running 18 SES audit checks…');
+        setStatusMsg('Running 19 SES audit checks…');
         setAppState('auditing');
         await new Promise((r) => setTimeout(r, 0));
 
@@ -279,7 +279,7 @@ export default function App() {
           parsed.termedPtoRows = termedRows;
         }
 
-        setStatusMsg('Running 16 audit checks…');
+        setStatusMsg('Running 17 audit checks…');
         setAppState('auditing');
 
         // Yield to event loop so UI updates

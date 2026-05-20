@@ -1,8 +1,9 @@
 // Check 7 — OT > threshold hrs Validation
-// From FSM I + FSM II: rows where Comments = "Over Time" AND Time Hours > rules.otThreshold.
+// From FSM I + FSM II: rows where Comments = "Overtime" AND Time Hours > rules.otThreshold.
 // Each must appear on OT Approval tab.
 // OT Approval tab: column for SEA DL must be populated for every data row.
 // Ignore any image/screenshot objects (SheetJS doesn't surface those).
+// Note: "Over Time" (two words) is normalized to "Overtime" at parse time.
 
 import type { CheckResult, LaborRow, OtApprovalRow } from '../types';
 import { toStr } from '../../lib/num';
@@ -18,7 +19,7 @@ export function check07OtApproval(
 
   const qualifying = [...fsmI, ...fsmII].filter((r) => {
     const cat = toStr(r.comments).toLowerCase();
-    return (cat === 'over time' || cat === 'overtime') && r.timeHours > otThreshold;
+    return cat === 'overtime' && r.timeHours > otThreshold;
   });
 
   const failures: Record<string, unknown>[] = [];
