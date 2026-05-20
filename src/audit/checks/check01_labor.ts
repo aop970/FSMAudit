@@ -1,25 +1,52 @@
 // Check 1 — Labor Billing Validation
 // FT: Markup = Base × rules.markupRates.ft | PT: Markup = Base × rules.markupRates.pt | else: 0
 // Loaded Rate = Base + Markup; Total Bill = Loaded Rate × Time Hours
-// OT billing (effectiveBase = otHourlyRates.fsmI/II) applies to:
+// OT billing (effectiveBase = otHourlyRates.fsmI/II/Merit) applies to:
 //   • "Overtime" rows for non-CA associates (note: "Over Time" is normalized at parse time)
-//   • "CA Daily OT" rows (always — this type is always billed at OT rate)
+//   • "CA Daily Overtime" / "CA Weekly Overtime" rows (always — billed at OT rate)
 // Tolerance ≤ rules.tolerances.dollar per row
-// If hourlyRates.fsmI/fsmII are set (> 0), validates base pay rate for non-OT rows.
+// If hourlyRates.fsmI/fsmII/Merit are set (> 0), validates base pay rate for non-OT rows.
 
 import type { CheckResult, LaborRow } from '../types';
 import { fmtMoney } from '../../lib/num';
 import { getAuditRules } from '../auditRules';
+
+// Resolve the configured base/OT rate for a labor row based on its sheet label.
+function resolveRates(
+  sheet: string,
+  rules: ReturnType<typeof getAuditRules>,
+): { expectedRate: number; otRate: number } {
+  const sheetLower = sheet.toLowerCase();
+  if (sheetLower === 'fsm i merit') {
+    return {
+      expectedRate: rules.hourlyRates.fsmIMerit ?? 0,
+      otRate: rules.otHourlyRates.fsmIMerit ?? 0,
+    };
+  }
+  if (sheetLower === 'fsm ii merit') {
+    return {
+      expectedRate: rules.hourlyRates.fsmIIMerit ?? 0,
+      otRate: rules.otHourlyRates.fsmIIMerit ?? 0,
+    };
+  }
+  if (sheetLower === 'fsm i') {
+    return {
+      expectedRate: rules.hourlyRates.fsmI,
+      otRate: rules.otHourlyRates.fsmI,
+    };
+  }
+  // Default: FSM II (and any other sheet label)
+  return {
+    expectedRate: rules.hourlyRates.fsmII,
+    otRate: rules.otHourlyRates.fsmII,
+  };
+}
 
 export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm' | 'ses'): CheckResult {
   const rules = getAuditRules(program);
   const dollarTol = rules.tolerances.dollar;
   const ftRate = rules.markupRates.ft;
   const ptRate = rules.markupRates.pt;
-  const expectedRateI  = rules.hourlyRates.fsmI;
-  const expectedRateII = rules.hourlyRates.fsmII;
-  const otRateI  = rules.otHourlyRates.fsmI;
-  const otRateII = rules.otHourlyRates.fsmII;
 
   const all = [...fsmI, ...fsmII];
   const failures: Record<string, unknown>[] = [];
@@ -27,15 +54,17 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
   for (const r of all) {
     if (r.timeHours === 0 && r.basePayRate === 0) continue;
     const type = r.associateType.toUpperCase().trim();
-    const isOverTime  = /overtime/i.test(r.comments);
-    const isCADailyOT = /ca\s*daily\s*ot/i.test(r.comments);
+    const commentLower = r.comments.trim().toLowerCase();
+    const isOverTime     = /overtime/i.test(r.comments);
+    const isCADailyOT   = commentLower === 'ca daily overtime';
+    const isCAWeeklyOT  = commentLower === 'ca weekly overtime';
     const isCA = /^ca$/i.test(r.associateState.trim()) || /california/i.test(r.associateState);
 
-    // CA Daily OT always gets OT billing; regular Over Time gets OT billing only for non-CA.
-    const useOtBilling = isCADailyOT || (isOverTime && !isCA);
-    const isAnyOT = isOverTime || isCADailyOT; // used to skip rate check
+    // CA Daily/Weekly OT always gets OT billing; regular Overtime gets OT billing only for non-CA.
+    const useOtBilling = isCADailyOT || isCAWeeklyOT || (isOverTime && !isCA);
+    const isAnyOT = isOverTime || isCADailyOT || isCAWeeklyOT; // used to skip rate check
 
-    const otRate = r.sheet === 'FSM I' ? otRateI : otRateII;
+    const { expectedRate, otRate } = resolveRates(r.sheet, rules);
     const effectiveBase = (useOtBilling && otRate > 0) ? otRate : r.basePayRate;
 
     const mu = type === 'FT'
@@ -51,7 +80,6 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
 
     // Hourly rate validation — only for non-OT rows (OT rows store full base rate in
     // the spreadsheet but bill at the OT rate, so the rate check is skipped for them).
-    const expectedRate = r.sheet === 'FSM I' ? expectedRateI : expectedRateII;
     const rateOk = expectedRate === 0 || r.basePayRate === 0 || isAnyOT
       ? true
       : Math.abs(r.basePayRate - expectedRate) <= dollarTol;

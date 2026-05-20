@@ -137,6 +137,8 @@ export interface ParsedData {
   punchFileName: string | null;
   fsmIRows: LaborRow[];
   fsmIIRows: LaborRow[];
+  fsmIMeritRows: LaborRow[];
+  fsmIIMeritRows: LaborRow[];
   punchRows: PunchRow[];
   mgmtRows: MgmtRow[];
   cloudRows: CloudRow[];

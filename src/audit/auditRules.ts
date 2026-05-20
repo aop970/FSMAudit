@@ -21,12 +21,16 @@ export interface AuditRules {
     pt: number;   // default 0.2770
   };
   hourlyRates: {
-    fsmI: number;   // $/hr base rate for FSM I rows; 0 = not configured (skip check)
-    fsmII: number;  // $/hr base rate for FSM II rows; 0 = not configured (skip check)
+    fsmI: number;       // $/hr base rate for FSM I rows; 0 = not configured (skip check)
+    fsmII: number;      // $/hr base rate for FSM II rows; 0 = not configured (skip check)
+    fsmIMerit: number;  // $/hr base rate for FSM I Merit rows; 0 = skip check
+    fsmIIMerit: number; // $/hr base rate for FSM II Merit rows; 0 = skip check
   };
   otHourlyRates: {
-    fsmI: number;   // $/hr OT rate for FSM I rows (typically half of fsmI); 0 = skip check
-    fsmII: number;  // $/hr OT rate for FSM II rows; 0 = skip check
+    fsmI: number;       // $/hr OT rate for FSM I rows (typically half of fsmI); 0 = skip check
+    fsmII: number;      // $/hr OT rate for FSM II rows; 0 = skip check
+    fsmIMerit: number;  // $/hr OT rate for FSM I Merit rows; 0 = skip check
+    fsmIIMerit: number; // $/hr OT rate for FSM II Merit rows; 0 = skip check
   };
   punchCategories: {
     supported: string[];  // default: Work, Travel, Admin, Training, Meeting, Break
@@ -54,10 +58,14 @@ export const DEFAULT_RULES: AuditRules = {
   hourlyRates: {
     fsmI: 0,
     fsmII: 0,
+    fsmIMerit: 0,
+    fsmIIMerit: 0,
   },
   otHourlyRates: {
     fsmI: 0,
     fsmII: 0,
+    fsmIMerit: 0,
+    fsmIIMerit: 0,
   },
   punchCategories: {
     supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
@@ -93,8 +101,8 @@ export const DEFAULT_RULES: AuditRules = {
 
 export const DEFAULT_SES_RULES: AuditRules = {
   markupRates: { ft: 0.2993, pt: 0.2770 },
-  hourlyRates: { fsmI: 0, fsmII: 0 },
-  otHourlyRates: { fsmI: 0, fsmII: 0 },
+  hourlyRates: { fsmI: 0, fsmII: 0, fsmIMerit: 0, fsmIIMerit: 0 },
+  otHourlyRates: { fsmI: 0, fsmII: 0, fsmIMerit: 0, fsmIIMerit: 0 },
   punchCategories: {
     supported: ['Work', 'Travel', 'Admin', 'Training', 'Meeting', 'Break'],
     exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Overtime'],
@@ -124,8 +132,19 @@ function defaultRules(program?: 'fsm' | 'ses'): AuditRules {
 function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRules {
   return {
     markupRates: { ...defaults.markupRates, ...(stored.markupRates ?? {}) },
-    hourlyRates: { ...defaults.hourlyRates, ...(stored.hourlyRates ?? {}) },
-    otHourlyRates: { ...defaults.otHourlyRates, ...(stored.otHourlyRates ?? {}) },
+    hourlyRates: {
+      ...defaults.hourlyRates,
+      ...(stored.hourlyRates ?? {}),
+      // Ensure new Merit fields are present even when loaded from older stored data
+      fsmIMerit:  (stored.hourlyRates as Record<string, number> | undefined)?.fsmIMerit  ?? defaults.hourlyRates.fsmIMerit,
+      fsmIIMerit: (stored.hourlyRates as Record<string, number> | undefined)?.fsmIIMerit ?? defaults.hourlyRates.fsmIIMerit,
+    },
+    otHourlyRates: {
+      ...defaults.otHourlyRates,
+      ...(stored.otHourlyRates ?? {}),
+      fsmIMerit:  (stored.otHourlyRates as Record<string, number> | undefined)?.fsmIMerit  ?? defaults.otHourlyRates.fsmIMerit,
+      fsmIIMerit: (stored.otHourlyRates as Record<string, number> | undefined)?.fsmIIMerit ?? defaults.otHourlyRates.fsmIIMerit,
+    },
     punchCategories: {
       supported: stored.punchCategories?.supported ?? defaults.punchCategories.supported,
       exceptions: stored.punchCategories?.exceptions ?? defaults.punchCategories.exceptions,

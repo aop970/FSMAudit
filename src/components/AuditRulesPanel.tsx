@@ -196,15 +196,22 @@ function HourlyRatesSection({
   const program = programProp ?? prog;
   const [fsmI, setFsmI] = useState(String(initial.fsmI));
   const [fsmII, setFsmII] = useState(String(initial.fsmII));
+  const [fsmIMerit, setFsmIMerit] = useState(String(initial.fsmIMerit ?? 0));
+  const [fsmIIMerit, setFsmIIMerit] = useState(String(initial.fsmIIMerit ?? 0));
   const [saveState, triggerSave] = useSaveState();
 
   const isDirty =
-    parseFloat(fsmI) !== initial.fsmI || parseFloat(fsmII) !== initial.fsmII;
+    parseFloat(fsmI) !== initial.fsmI ||
+    parseFloat(fsmII) !== initial.fsmII ||
+    parseFloat(fsmIMerit) !== (initial.fsmIMerit ?? 0) ||
+    parseFloat(fsmIIMerit) !== (initial.fsmIIMerit ?? 0);
 
   function handleSave() {
     const ok = saveRulesSection('hourlyRates', {
       fsmI: parseFloat(fsmI) || 0,
       fsmII: program === 'ses' ? 0 : (parseFloat(fsmII) || 0),
+      fsmIMerit: program === 'ses' ? 0 : (parseFloat(fsmIMerit) || 0),
+      fsmIIMerit: program === 'ses' ? 0 : (parseFloat(fsmIIMerit) || 0),
     }, prog);
     triggerSave(ok);
   }
@@ -213,6 +220,8 @@ function HourlyRatesSection({
     const defaults = program === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
     setFsmI(String(defaults.hourlyRates.fsmI));
     setFsmII(String(defaults.hourlyRates.fsmII));
+    setFsmIMerit(String(defaults.hourlyRates.fsmIMerit ?? 0));
+    setFsmIIMerit(String(defaults.hourlyRates.fsmIIMerit ?? 0));
     const ok = resetSection('hourlyRates', prog);
     triggerSave(ok);
   }
@@ -223,7 +232,7 @@ function HourlyRatesSection({
       <p className="text-[10px] text-mc-dim mb-2">
         {program === 'ses'
           ? 'Expected base pay rate for SES Detail rows. Set to 0 to skip rate validation.'
-          : 'Expected base pay rates for FSM I and FSM II rows. Set to 0 to skip rate validation.'}
+          : 'Expected base pay rates for FSM I, FSM II, and Merit rows. Set to 0 to skip rate validation.'}
         {' '}Check 01 will flag any row whose base rate does not match the configured value.
       </p>
       {program === 'ses' ? (
@@ -268,6 +277,32 @@ function HourlyRatesSection({
               placeholder="0 = disabled"
             />
           </label>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">FSM I Merit Rate ($/hr)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={fsmIMerit}
+              onChange={(e) => setFsmIMerit(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="0 = disabled"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-mc-dim mb-1 block">FSM II Merit Rate ($/hr)</span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={fsmIIMerit}
+              onChange={(e) => setFsmIIMerit(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="0 = disabled"
+            />
+          </label>
         </div>
       )}
       <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
@@ -281,15 +316,22 @@ function OtHourlyRatesSection({ initial }: { initial: AuditRules['otHourlyRates'
   const prog = useProgram();
   const [fsmI, setFsmI] = useState(String(initial.fsmI));
   const [fsmII, setFsmII] = useState(String(initial.fsmII));
+  const [fsmIMerit, setFsmIMerit] = useState(String(initial.fsmIMerit ?? 0));
+  const [fsmIIMerit, setFsmIIMerit] = useState(String(initial.fsmIIMerit ?? 0));
   const [saveState, triggerSave] = useSaveState();
 
   const isDirty =
-    parseFloat(fsmI) !== initial.fsmI || parseFloat(fsmII) !== initial.fsmII;
+    parseFloat(fsmI) !== initial.fsmI ||
+    parseFloat(fsmII) !== initial.fsmII ||
+    parseFloat(fsmIMerit) !== (initial.fsmIMerit ?? 0) ||
+    parseFloat(fsmIIMerit) !== (initial.fsmIIMerit ?? 0);
 
   function handleSave() {
     const ok = saveRulesSection('otHourlyRates', {
       fsmI: parseFloat(fsmI) || 0,
       fsmII: parseFloat(fsmII) || 0,
+      fsmIMerit: parseFloat(fsmIMerit) || 0,
+      fsmIIMerit: parseFloat(fsmIIMerit) || 0,
     }, prog);
     triggerSave(ok);
   }
@@ -297,6 +339,8 @@ function OtHourlyRatesSection({ initial }: { initial: AuditRules['otHourlyRates'
   function handleReset() {
     setFsmI(String(DEFAULT_RULES.otHourlyRates.fsmI));
     setFsmII(String(DEFAULT_RULES.otHourlyRates.fsmII));
+    setFsmIMerit(String(DEFAULT_RULES.otHourlyRates.fsmIMerit ?? 0));
+    setFsmIIMerit(String(DEFAULT_RULES.otHourlyRates.fsmIIMerit ?? 0));
     const ok = resetSection('otHourlyRates', prog);
     triggerSave(ok);
   }
@@ -305,7 +349,7 @@ function OtHourlyRatesSection({ initial }: { initial: AuditRules['otHourlyRates'
     <div className="section-block">
       <SectionHeader title="OT Hourly Rates" dirty={isDirty} />
       <p className="text-[10px] text-mc-dim mb-2">
-        Expected billing rates for Over Time (non-CA) and CA Daily OT rows. Set to 0 to skip OT billing validation.
+        Expected billing rates for Overtime (non-CA), CA Daily OT, and CA Weekly OT rows. Set to 0 to skip OT billing validation.
         Check 01 uses these rates to verify OT bill and markup calculations.
       </p>
       <div className="grid grid-cols-2 gap-3">
@@ -330,6 +374,32 @@ function OtHourlyRatesSection({ initial }: { initial: AuditRules['otHourlyRates'
             min="0"
             value={fsmII}
             onChange={(e) => setFsmII(e.target.value)}
+            className={inputCls}
+            style={inputStyle}
+            placeholder="0 = disabled"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[11px] text-mc-dim mb-1 block">FSM I Merit OT Rate ($/hr)</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={fsmIMerit}
+            onChange={(e) => setFsmIMerit(e.target.value)}
+            className={inputCls}
+            style={inputStyle}
+            placeholder="0 = disabled"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[11px] text-mc-dim mb-1 block">FSM II Merit OT Rate ($/hr)</span>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={fsmIIMerit}
+            onChange={(e) => setFsmIIMerit(e.target.value)}
             className={inputCls}
             style={inputStyle}
             placeholder="0 = disabled"

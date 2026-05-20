@@ -30,7 +30,9 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
   const controlMap = buildControlMap(controlTable);
   const rules = getAuditRules();
 
-  const laborRows = [...parsed.fsmIRows, ...parsed.fsmIIRows];
+  const allFsmI  = [...parsed.fsmIRows,  ...parsed.fsmIMeritRows];
+  const allFsmII = [...parsed.fsmIIRows, ...parsed.fsmIIMeritRows];
+  const laborRows = [...allFsmI, ...allFsmII];
   const fieldLaborTotal = laborRows.reduce((s, r) => s + r.billValue, 0);
   const managementTotal = parsed.mgmtRows.reduce((s, r) => s + r.totalBill, 0);
   const cloudTotal = parsed.cloudRows.reduce((s, r) => s + r.amount, 0);
@@ -42,27 +44,27 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
   for (const r of laborRows) if (r.associateId) uniqueIds.add(r.associateId);
 
   const results: CheckResult[] = [
-    check01Labor(parsed.fsmIRows, parsed.fsmIIRows),
-    check02Formulas(parsed.fsmIRows, parsed.fsmIIRows),
-    check03PunchRecon(parsed.fsmIRows, parsed.fsmIIRows, parsed.punchRows),
+    check01Labor(allFsmI, allFsmII),
+    check02Formulas(allFsmI, allFsmII),
+    check03PunchRecon(allFsmI, allFsmII, parsed.punchRows),
     check04PunchIntegrity(parsed.punchRows),
     check05Management(parsed.mgmtRows, controlMap),
     check06Cloud(parsed.cloudRows, parsed.mgmtRows),
-    check07OtApproval(parsed.fsmIRows, parsed.fsmIIRows, parsed.otApprovalRows),
-    check08Roster(parsed.fsmIRows, parsed.fsmIIRows, parsed.rosterEntries),
+    check07OtApproval(allFsmI, allFsmII, parsed.otApprovalRows),
+    check08Roster(allFsmI, allFsmII, parsed.rosterEntries),
     check09TieOut(parsed.tieOutData),
     check10InvoiceIdentity(
       parsed.invoiceNumber,
       parsed.tabNames[0] ?? null,
       parsed.fileName,
     ),
-    check11DateRange(parsed.fsmIRows, parsed.fsmIIRows, parsed.declaredPeriod),
-    check12TimeOff(parsed.fsmIRows, parsed.fsmIIRows, parsed.timeOffRows),
+    check11DateRange(allFsmI, allFsmII, parsed.declaredPeriod),
+    check12TimeOff(allFsmI, allFsmII, parsed.timeOffRows),
     check13PoNumber(parsed.e17Value, rules.poNumber),
-    check14TermedPto(parsed.fsmIRows, parsed.fsmIIRows, parsed.mgmtRows, parsed.termedPtoRows),
-    check15CustomRules(parsed.fsmIRows, parsed.fsmIIRows),
-    check16RiSundayPremium(parsed.fsmIRows, parsed.fsmIIRows),
-    check17OtMath(parsed.fsmIRows, parsed.fsmIIRows),
+    check14TermedPto(allFsmI, allFsmII, parsed.mgmtRows, parsed.termedPtoRows),
+    check15CustomRules(allFsmI, allFsmII),
+    check16RiSundayPremium(allFsmI, allFsmII),
+    check17OtMath(allFsmI, allFsmII),
   ];
 
   const period = parsed.declaredPeriod

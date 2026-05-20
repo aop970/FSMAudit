@@ -680,8 +680,10 @@ export async function parseInvoice(
     // Non-fatal — checks 10/11/13 will report missing data
   }
 
-  const fsmI   = findSheet(wb, ['FSM I']);
-  const fsmII  = findSheet(wb, ['FSM II']);
+  const fsmI       = findSheet(wb, ['FSM I']);
+  const fsmII      = findSheet(wb, ['FSM II']);
+  const fsmIMerit  = findSheet(wb, ['FSM I Merit']);
+  const fsmIIMerit = findSheet(wb, ['FSM II Merit']);
   const mgmt   = findSheet(wb, ['Management Detail Hours', 'Management']);
   const cloud  = findSheet(wb, ['Cloud Services', 'Cloud']);
   const roster1 = findSheet(wb, ['FSM Roster', 'Roster']);
@@ -689,8 +691,10 @@ export async function parseInvoice(
   const ot     = findSheet(wb, ['OT Approval']);
   const invSum = findSheet(wb, ['Invoice Summary', 'Tie-Out', 'Invoice Schedule']);
 
-  const fsmIRows   = fsmI   ? parseLaborSheet('FSM I',  fsmI.ws)  : [];
-  const fsmIIRows  = fsmII  ? parseLaborSheet('FSM II', fsmII.ws) : [];
+  const fsmIRows       = fsmI       ? parseLaborSheet('FSM I',        fsmI.ws)       : [];
+  const fsmIIRows      = fsmII      ? parseLaborSheet('FSM II',       fsmII.ws)      : [];
+  const fsmIMeritRows  = fsmIMerit  ? parseLaborSheet('FSM I Merit',  fsmIMerit.ws)  : [];
+  const fsmIIMeritRows = fsmIIMerit ? parseLaborSheet('FSM II Merit', fsmIIMerit.ws) : [];
   const mgmtRows   = mgmt   ? parseMgmtSheet(mgmt.ws)   : [];
   const cloudRows  = cloud  ? parseCloudSheet(cloud.ws) : [];
 
@@ -736,7 +740,7 @@ export async function parseInvoice(
   if (!declaredPeriod) declaredPeriod = parseDeclaredPeriod(wb);
 
   const weekSet = new Set<number>();
-  for (const r of [...fsmIRows, ...fsmIIRows]) {
+  for (const r of [...fsmIRows, ...fsmIIRows, ...fsmIMeritRows, ...fsmIIMeritRows]) {
     if (r.week != null && r.week > 0) weekSet.add(r.week);
   }
   const weeksCovered = Array.from(weekSet).sort((a, b) => a - b);
@@ -745,11 +749,14 @@ export async function parseInvoice(
   if (!formulasParsed) crossTabNotes.push('Formula extraction skipped (workbook contains unsupported array formula types) — Check 2 MU/Bill formula verification will use values only.');
   if (!fsmI) crossTabNotes.push('FSM I tab not found in workbook.');
   if (!fsmII) crossTabNotes.push('FSM II tab not found in workbook.');
+  if (!fsmIMerit) crossTabNotes.push('FSM I Merit tab not found — Merit rows will not be audited (optional tab).');
+  if (!fsmIIMerit) crossTabNotes.push('FSM II Merit tab not found — Merit rows will not be audited (optional tab).');
   if (!invSum) crossTabNotes.push('Invoice Summary tab not found — tie-out check will use reconstructed totals only.');
   if (!otApprovalRows.length) crossTabNotes.push('OT Approval tab is empty or not found.');
   if (!punchFileName) crossTabNotes.push('No punch CSV uploaded — punch checks will be skipped.');
+  const totalLaborRows = fsmIRows.length + fsmIIRows.length + fsmIMeritRows.length + fsmIIMeritRows.length;
   crossTabNotes.push(
-    `Roster entries: ${rosterEntries.length}. Labor rows: ${fsmIRows.length + fsmIIRows.length}. Punch rows: ${punchRows.length}.`,
+    `Roster entries: ${rosterEntries.length}. Labor rows: ${totalLaborRows} (FSM I: ${fsmIRows.length}, FSM II: ${fsmIIRows.length}, FSM I Merit: ${fsmIMeritRows.length}, FSM II Merit: ${fsmIIMeritRows.length}). Punch rows: ${punchRows.length}.`,
   );
 
   return {
@@ -759,6 +766,8 @@ export async function parseInvoice(
     punchFileName,
     fsmIRows,
     fsmIIRows,
+    fsmIMeritRows,
+    fsmIIMeritRows,
     punchRows,
     mgmtRows,
     cloudRows,
@@ -1057,6 +1066,8 @@ export async function parseSesInvoice(
     punchFileName,
     fsmIRows,
     fsmIIRows,
+    fsmIMeritRows: [],
+    fsmIIMeritRows: [],
     punchRows: [],
     mgmtRows,
     cloudRows,
