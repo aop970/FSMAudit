@@ -138,12 +138,19 @@ export function check17OtMath(
   };
 
   const nonCaWeekMap = new Map<string, WeekAccum>();
+  // Secondary index: "employeeName.lower()|weekNum" → weekKey (ISO Monday date string).
+  // Used to match OT rows that carry a null visitDate (date-range rows) against the
+  // correct employee-week bucket using the numeric "Week" column instead.
+  const nonCaWeekNumIndex = new Map<string, string>();
 
+  // Pass 1 — accumulate eligible hours (rows always have a visitDate).
   for (const r of allRows) {
     if (isCA(r.associateState)) continue;
     if (!r.visitDate) continue;
 
     const t = normalizeType(r.comments);
+    if (!ELIGIBLE_TYPES.has(t)) continue;
+
     const wk = weekStartKey(r.visitDate);
     const mapKey = `${r.employeeName.toLowerCase()}|${wk}`;
 
@@ -156,13 +163,51 @@ export function check17OtMath(
         invoicedOtHrs: 0,
       });
     }
-    const entry = nonCaWeekMap.get(mapKey)!;
+    nonCaWeekMap.get(mapKey)!.eligibleHrs += r.timeHours;
 
-    if (ELIGIBLE_TYPES.has(t)) {
-      entry.eligibleHrs += r.timeHours;
-    } else if (t === 'overtime') {
-      entry.invoicedOtHrs += r.timeHours;
+    // Record week-number → weekKey for this employee (so OT date-range rows can find us).
+    if (r.week != null) {
+      const numKey = `${r.employeeName.toLowerCase()}|${r.week}`;
+      if (!nonCaWeekNumIndex.has(numKey)) nonCaWeekNumIndex.set(numKey, wk);
     }
+  }
+
+  // Pass 2 — accumulate invoiced OT hours.
+  // OT rows on invoices often cover the full Mon–Sun week as a date range, which SheetJS
+  // cannot parse as a Date object — those rows arrive with visitDate === null.
+  // When visitDate is present, use it directly. When null, fall back to the numeric
+  // "Week" column (r.week) to locate the correct employee-week bucket.
+  for (const r of allRows) {
+    if (isCA(r.associateState)) continue;
+    const t = normalizeType(r.comments);
+    if (t !== 'overtime') continue;
+
+    let mapKey: string | null = null;
+
+    if (r.visitDate) {
+      // Single-date OT row — map directly.
+      mapKey = `${r.employeeName.toLowerCase()}|${weekStartKey(r.visitDate)}`;
+    } else if (r.week != null) {
+      // Date-range OT row — resolve via the week-number index built in pass 1.
+      const wk = nonCaWeekNumIndex.get(`${r.employeeName.toLowerCase()}|${r.week}`);
+      if (wk) mapKey = `${r.employeeName.toLowerCase()}|${wk}`;
+    }
+
+    if (!mapKey) continue;
+
+    if (!nonCaWeekMap.has(mapKey)) {
+      // OT row exists but no eligible rows found for this employee-week — still track it
+      // so the "OT row exists but no OT expected" failure is surfaced correctly.
+      const wk = mapKey.split('|')[1];
+      nonCaWeekMap.set(mapKey, {
+        employeeName: r.employeeName,
+        state: r.associateState,
+        weekKey: wk,
+        eligibleHrs: 0,
+        invoicedOtHrs: 0,
+      });
+    }
+    nonCaWeekMap.get(mapKey)!.invoicedOtHrs += r.timeHours;
   }
 
   const nonCaFailures: Record<string, unknown>[] = [];
