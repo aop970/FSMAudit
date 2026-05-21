@@ -22,6 +22,9 @@ dist-ssr
 *.xlsx
 *.csv
 
+# Vite dev-server cache
+.vite/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
