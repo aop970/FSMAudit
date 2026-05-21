@@ -22,7 +22,7 @@ export function check09TieOut(tieOut: TieOutData | null): CheckResult {
   const passTol    = rules.tolerances.dollar;   // ≤ $0.01 → pass
   const warnTol    = 0.03;                      // ≤ $0.03 → warning, > $0.03 → fail
 
-  const fieldLaborTotal = tieOut.fsmITotal + tieOut.fsmIITotal;
+  const fieldLaborTotal = tieOut.fsmITotal + tieOut.fsmIITotal + tieOut.fsmIMeritTotal + tieOut.fsmIIMeritTotal;
   const reconstructed = fieldLaborTotal + tieOut.mgmtTotal + tieOut.cloudTotal;
   const invoiceTotal = tieOut.invoiceTotal;
 
@@ -37,6 +37,8 @@ export function check09TieOut(tieOut: TieOutData | null): CheckResult {
         {
           fsmITotal: fmtMoney(tieOut.fsmITotal),
           fsmIITotal: fmtMoney(tieOut.fsmIITotal),
+          fsmIMeritTotal: fmtMoney(tieOut.fsmIMeritTotal),
+          fsmIIMeritTotal: fmtMoney(tieOut.fsmIIMeritTotal),
           mgmtTotal: fmtMoney(tieOut.mgmtTotal),
           cloudTotal: fmtMoney(tieOut.cloudTotal),
           reconstructed: fmtMoney(reconstructed),
@@ -61,6 +63,8 @@ export function check09TieOut(tieOut: TieOutData | null): CheckResult {
       {
         fsmITotal: fmtMoney(tieOut.fsmITotal),
         fsmIITotal: fmtMoney(tieOut.fsmIITotal),
+        fsmIMeritTotal: fmtMoney(tieOut.fsmIMeritTotal),
+        fsmIIMeritTotal: fmtMoney(tieOut.fsmIIMeritTotal),
         mgmtTotal: fmtMoney(tieOut.mgmtTotal),
         cloudTotal: fmtMoney(tieOut.cloudTotal),
         reconstructed: fmtMoney(reconstructed),
@@ -71,6 +75,8 @@ export function check09TieOut(tieOut: TieOutData | null): CheckResult {
     details: {
       fsmITotal: tieOut.fsmITotal,
       fsmIITotal: tieOut.fsmIITotal,
+      fsmIMeritTotal: tieOut.fsmIMeritTotal,
+      fsmIIMeritTotal: tieOut.fsmIIMeritTotal,
       fieldLaborTotal,
       mgmtTotal: tieOut.mgmtTotal,
       cloudTotal: tieOut.cloudTotal,

@@ -252,6 +252,11 @@ export function check17OtMath(
   };
 
   const caWeekMap = new Map<string, CaWeekAccum>();
+  // "employeeName.lower()|weekNum" → weekKey (ISO Monday date string).
+  // Used to match CA Weekly OT orphan rows (visitDate=null date-range) to the
+  // correct employee-week bucket via the numeric "Week" column, exactly as
+  // nonCaWeekNumIndex does for non-CA employees.
+  const caWeekNumIndex = new Map<string, string>();
 
   for (const r of allRows) {
     if (!isCA(r.associateState)) continue;
@@ -312,6 +317,11 @@ export function check17OtMath(
     const dk = toDateKey(r.visitDate!);
     entry.dailyEligible.set(dk, (entry.dailyEligible.get(dk) ?? 0) + r.timeHours);
     entry.totalEligibleHrs += r.timeHours;
+
+    if (r.week != null) {
+      const numKey = `${r.employeeName.toLowerCase()}|${r.week}`;
+      if (!caWeekNumIndex.has(numKey)) caWeekNumIndex.set(numKey, wk);
+    }
   }
 
   // Handle CA Weekly OT rows with no visitDate — try to match to existing employee+week buckets
@@ -327,45 +337,50 @@ export function check17OtMath(
   }
 
   if (caWeeklyOtOrphans.length > 0) {
-    // Group orphans by employee name
-    const orphansByEmployee = new Map<string, LaborRow[]>();
     for (const r of caWeeklyOtOrphans) {
-      const key = r.employeeName.toLowerCase();
-      if (!orphansByEmployee.has(key)) orphansByEmployee.set(key, []);
-      orphansByEmployee.get(key)!.push(r);
-    }
+      const empKey = r.employeeName.toLowerCase();
+      let mapKey: string | null = null;
 
-    for (const [empKey, orphans] of orphansByEmployee) {
-      // Find all week buckets for this employee
-      const empWeeks = Array.from(caWeekMap.entries())
-        .filter(([k]) => k.startsWith(empKey + '|'))
-        .map(([, v]) => v);
-
-      if (empWeeks.length === 1) {
-        // Exactly one week bucket — assign orphans there
-        for (const r of orphans) {
-          empWeeks[0].invoicedOtHrs += r.timeHours;
-        }
-      } else if (empWeeks.length === 0) {
-        // No eligible rows found for this employee — create a bucket with zero eligible
-        // We'll use a sentinel week key "(unknown)"; it won't match any real week
-        // and the check will flag it as invoiced-but-no-eligible.
-        for (const r of orphans) {
-          const sentinelKey = `${empKey}|(unknown)`;
-          if (!caWeekMap.has(sentinelKey)) {
-            caWeekMap.set(sentinelKey, {
-              employeeName: r.employeeName,
-              state: r.associateState,
-              weekKey: '(unknown)',
-              dailyEligible: new Map(),
-              totalEligibleHrs: 0,
-              invoicedOtHrs: 0,
-            });
-          }
-          caWeekMap.get(sentinelKey)!.invoicedOtHrs += r.timeHours;
-        }
+      // Primary: use the numeric Week column to find the correct bucket.
+      if (r.week != null) {
+        const wk = caWeekNumIndex.get(`${empKey}|${r.week}`);
+        if (wk) mapKey = `${empKey}|${wk}`;
       }
-      // If multiple week buckets, we can't safely assign — leave unassigned (conservative).
+
+      // Fallback: if exactly one week bucket exists for this employee, assign there.
+      if (!mapKey) {
+        const empEntries = Array.from(caWeekMap.entries()).filter(([k]) => k.startsWith(empKey + '|'));
+        if (empEntries.length === 1) mapKey = empEntries[0][0];
+      }
+
+      if (mapKey) {
+        if (!caWeekMap.has(mapKey)) {
+          const wkPart = mapKey.split('|')[1];
+          caWeekMap.set(mapKey, {
+            employeeName: r.employeeName,
+            state: r.associateState,
+            weekKey: wkPart,
+            dailyEligible: new Map(),
+            totalEligibleHrs: 0,
+            invoicedOtHrs: 0,
+          });
+        }
+        caWeekMap.get(mapKey)!.invoicedOtHrs += r.timeHours;
+      } else {
+        // Cannot determine week — create sentinel bucket so it surfaces as an anomaly.
+        const sentinelKey = `${empKey}|(unknown)`;
+        if (!caWeekMap.has(sentinelKey)) {
+          caWeekMap.set(sentinelKey, {
+            employeeName: r.employeeName,
+            state: r.associateState,
+            weekKey: '(unknown)',
+            dailyEligible: new Map(),
+            totalEligibleHrs: 0,
+            invoicedOtHrs: 0,
+          });
+        }
+        caWeekMap.get(sentinelKey)!.invoicedOtHrs += r.timeHours;
+      }
     }
   }
 

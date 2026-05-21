@@ -307,7 +307,9 @@ function readFirstTabMeta(wb: XLSX.WorkBook): {
 
 function parseInvoiceSummary(
   ws: XLSX.WorkSheet,
-  fsmITotal: number, fsmIITotal: number, mgmtTotal: number, cloudTotal: number,
+  fsmITotal: number, fsmIITotal: number,
+  fsmIMeritTotal: number, fsmIIMeritTotal: number,
+  mgmtTotal: number, cloudTotal: number,
 ): TieOutData {
   const aoa = XLSX.utils.sheet_to_json(ws, {
     header: 1, raw: true, defval: null, blankrows: false,
@@ -341,7 +343,8 @@ function parseInvoiceSummary(
   }
 
   return {
-    fsmITotal, fsmIITotal, mgmtTotal, cloudTotal,
+    fsmITotal, fsmIITotal, fsmIMeritTotal, fsmIIMeritTotal,
+    mgmtTotal, cloudTotal,
     invoiceTotal,
     extraLineItems: extras,
   };
@@ -712,14 +715,16 @@ export async function parseInvoice(
     punchFileName = punchFile.name;
   }
 
-  const fsmITotal   = Math.round(fsmIRows.reduce((s, r)  => s + r.billValue,  0) * 100) / 100;
-  const fsmIITotal  = Math.round(fsmIIRows.reduce((s, r) => s + r.billValue,  0) * 100) / 100;
-  const mgmtTotal   = Math.round(mgmtRows.reduce((s, r)  => s + r.totalBill,  0) * 100) / 100;
-  const cloudTotal  = Math.round(cloudRows.reduce((s, r)  => s + r.amount,    0) * 100) / 100;
+  const fsmITotal       = Math.round(fsmIRows.reduce((s, r)       => s + r.billValue, 0) * 100) / 100;
+  const fsmIITotal      = Math.round(fsmIIRows.reduce((s, r)      => s + r.billValue, 0) * 100) / 100;
+  const fsmIMeritTotal  = Math.round(fsmIMeritRows.reduce((s, r)  => s + r.billValue, 0) * 100) / 100;
+  const fsmIIMeritTotal = Math.round(fsmIIMeritRows.reduce((s, r) => s + r.billValue, 0) * 100) / 100;
+  const mgmtTotal       = Math.round(mgmtRows.reduce((s, r)       => s + r.totalBill, 0) * 100) / 100;
+  const cloudTotal      = Math.round(cloudRows.reduce((s, r)       => s + r.amount,   0) * 100) / 100;
 
   const tieOutData = invSum
-    ? parseInvoiceSummary(invSum.ws, fsmITotal, fsmIITotal, mgmtTotal, cloudTotal)
-    : { fsmITotal, fsmIITotal, mgmtTotal, cloudTotal, invoiceTotal: null, extraLineItems: [] };
+    ? parseInvoiceSummary(invSum.ws, fsmITotal, fsmIITotal, fsmIMeritTotal, fsmIIMeritTotal, mgmtTotal, cloudTotal)
+    : { fsmITotal, fsmIITotal, fsmIMeritTotal, fsmIIMeritTotal, mgmtTotal, cloudTotal, invoiceTotal: null, extraLineItems: [] };
 
   // E21 is more authoritative than Tie-Out tab parsing — override if present
   if (invoiceTotalRaw !== null) {
@@ -1019,14 +1024,16 @@ export async function parseSesInvoice(
     shiftRows = [...shiftRows, ...rows];
   }
 
-  const fsmITotal   = Math.round(fsmIRows.reduce((s, r)  => s + r.billValue, 0) * 100) / 100;
-  const fsmIITotal  = 0;
-  const mgmtTotal   = Math.round(mgmtRows.reduce((s, r)  => s + r.totalBill, 0) * 100) / 100;
-  const cloudTotal  = Math.round(cloudRows.reduce((s, r)  => s + r.amount,   0) * 100) / 100;
+  const fsmITotal       = Math.round(fsmIRows.reduce((s, r) => s + r.billValue, 0) * 100) / 100;
+  const fsmIITotal      = 0;
+  const fsmIMeritTotal  = 0;
+  const fsmIIMeritTotal = 0;
+  const mgmtTotal       = Math.round(mgmtRows.reduce((s, r) => s + r.totalBill, 0) * 100) / 100;
+  const cloudTotal      = Math.round(cloudRows.reduce((s, r) => s + r.amount,   0) * 100) / 100;
 
   const tieOutData = invSum
-    ? parseInvoiceSummary(invSum.ws, fsmITotal, fsmIITotal, mgmtTotal, cloudTotal)
-    : { fsmITotal, fsmIITotal, mgmtTotal, cloudTotal, invoiceTotal: null, extraLineItems: [] };
+    ? parseInvoiceSummary(invSum.ws, fsmITotal, fsmIITotal, fsmIMeritTotal, fsmIIMeritTotal, mgmtTotal, cloudTotal)
+    : { fsmITotal, fsmIITotal, fsmIMeritTotal, fsmIIMeritTotal, mgmtTotal, cloudTotal, invoiceTotal: null, extraLineItems: [] };
 
   if (invoiceTotalRaw !== null) {
     tieOutData.invoiceTotal = Math.round(invoiceTotalRaw * 100) / 100;

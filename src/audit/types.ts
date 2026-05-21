@@ -116,6 +116,8 @@ export interface TermedPtoRow {
 export interface TieOutData {
   fsmITotal: number;
   fsmIITotal: number;
+  fsmIMeritTotal: number;
+  fsmIIMeritTotal: number;
   mgmtTotal: number;
   cloudTotal: number;
   invoiceTotal: number | null;
