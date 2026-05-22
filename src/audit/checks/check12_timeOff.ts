@@ -4,7 +4,7 @@
 // entries on the same day (e.g. 2 hrs PSL + 5.08 hrs vacation = 7.08 hrs) are
 // compared as a combined total against the sum of invoice time-off-comment rows.
 
-import type { CheckResult, LaborRow, TimeOffRow } from '../types';
+import type { CheckResult, LaborRow, MgmtRow, TimeOffRow } from '../types';
 
 const TIME_OFF_KEYWORDS = ['time off', 'pto', 'paid time off', 'sick', 'bereavement', 'vacation', 'leave', 'holiday'];
 
@@ -53,6 +53,7 @@ export function check12TimeOff(
   fsmI: LaborRow[],
   fsmII: LaborRow[],
   timeOffRows: TimeOffRow[],
+  mgmtRows: MgmtRow[] = [],
 ): CheckResult {
   if (timeOffRows.length === 0) {
     return {
@@ -65,12 +66,17 @@ export function check12TimeOff(
     };
   }
 
+  const mgmtIds = new Set(mgmtRows.map((r) => r.associateId.toUpperCase()));
+
   const laborRows = [...fsmI, ...fsmII];
   const groups = groupByEmployeeDate(timeOffRows);
   const failures: Record<string, unknown>[] = [];
 
   for (const group of groups) {
     const idUpper = group.associateId.toUpperCase();
+
+    // Management staff are not billed for time off — skip silently.
+    if (mgmtIds.has(idUpper)) continue;
 
     // Invoice rows for this employee+date that carry a time-off comment
     const timeOffInvoiceRows = laborRows.filter((r) => {

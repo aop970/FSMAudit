@@ -3,7 +3,8 @@
 //
 // Eligible time types (count toward OT thresholds): Work, Travel, Training, Meeting, Admin
 // Excluded time types (never count):                Time Off, Termed PTO, Bereavement Leave, Overtime,
-//                                                    CA Daily Overtime, CA Weekly Overtime
+//                                                    CA Daily Overtime, CA Weekly Overtime,
+//                                                    Puerto Rico Daily OT, Puerto Rico Weekly OT
 // Unrecognized time types: surfaced as a warning; excluded from OT calc until confirmed.
 //
 // Non-CA employees — Weekly OT (40h threshold, Mon-Sun weeks):
@@ -33,6 +34,7 @@ const ELIGIBLE_TYPES = new Set([
 const EXCLUDED_TYPES = new Set([
   'time off', 'termed pto', 'bereavement leave', 'overtime',
   'ca daily overtime', 'ca weekly overtime',
+  'puerto rico daily ot', 'puerto rico weekly ot',
 ]);
 
 function isCA(state: string): boolean {

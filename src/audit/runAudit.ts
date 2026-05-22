@@ -59,7 +59,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
       parsed.fileName,
     ),
     check11DateRange(allFsmI, allFsmII, parsed.declaredPeriod),
-    check12TimeOff(allFsmI, allFsmII, parsed.timeOffRows),
+    check12TimeOff(allFsmI, allFsmII, parsed.timeOffRows, parsed.mgmtRows),
     check13PoNumber(parsed.e17Value, rules.poNumber),
     check14TermedPto(allFsmI, allFsmII, parsed.mgmtRows, parsed.termedPtoRows),
     check15CustomRules(allFsmI, allFsmII),
