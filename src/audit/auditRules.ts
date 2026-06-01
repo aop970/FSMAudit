@@ -42,7 +42,7 @@ export interface AuditRules {
     hours: number;   // default 0.01
   };
   invoiceTabs: {
-    toLoad: string[];         // default: FSM I, FSM II, Management Detail Hours, Cloud Services, Roster, Roster II, Invoice Summary, OT Approval
+    toLoad: string[];         // default: FSM I, FSM II, Management Detail Hours, Cloud Services, FSM Roster, Invoice Summary, OT Approval
     alwaysExclude: string[];  // default: SOW
   };
   poNumber: string;            // default: T26C31H000162 — verified against E17 of first tab
@@ -82,8 +82,7 @@ export const DEFAULT_RULES: AuditRules = {
       'FSM II',
       'Management Detail Hours',
       'Cloud Services',
-      'Roster',
-      'Roster II',
+      'FSM Roster',
       'Invoice Summary',
       'OT Approval',
     ],

@@ -248,13 +248,15 @@ function parseRosterSheet(ws: XLSX.WorkSheet): RosterEntry[] {
   const cName = headers.findIndex((h) => h.includes('employee') && h.includes('name'));
   const cId   = headers.indexOf('associate id');
   if (cName < 0 || cId < 0) return [];
+  const cTypeIdx = headers.findIndex((h) => h.includes('type'));
+  const cType = cTypeIdx >= 0 ? cTypeIdx : 4;
   const out: RosterEntry[] = [];
   for (let i = 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
     const name = toStr(row[cName]);
     const id   = toStr(row[cId]);
     if (!name && !id) continue;
-    out.push({ name, associateId: id });
+    out.push({ name, associateId: id, type: toStr(row[cType]) });
   }
   return out;
 }
@@ -690,7 +692,6 @@ export async function parseInvoice(
   const mgmt   = findSheet(wb, ['Management Detail Hours', 'Management']);
   const cloud  = findSheet(wb, ['Cloud Services', 'Cloud']);
   const roster1 = findSheet(wb, ['FSM Roster', 'Roster']);
-  const roster2 = findSheet(wb, ['FSM II Roster', 'Roster II']);
   const ot     = findSheet(wb, ['OT Approval']);
   const invSum = findSheet(wb, ['Invoice Summary', 'Tie-Out', 'Invoice Schedule']);
 
@@ -701,10 +702,7 @@ export async function parseInvoice(
   const mgmtRows   = mgmt   ? parseMgmtSheet(mgmt.ws)   : [];
   const cloudRows  = cloud  ? parseCloudSheet(cloud.ws) : [];
 
-  const rosterEntries: RosterEntry[] = [
-    ...(roster1 ? parseRosterSheet(roster1.ws) : []),
-    ...(roster2 ? parseRosterSheet(roster2.ws) : []),
-  ];
+  const rosterEntries: RosterEntry[] = roster1 ? parseRosterSheet(roster1.ws) : [];
   const otApprovalRows = ot ? parseOtApprovalSheet(ot.ws) : [];
 
   // Punch Detail — ALWAYS from standalone CSV, never from invoice tabs.

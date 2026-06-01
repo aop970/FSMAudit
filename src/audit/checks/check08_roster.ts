@@ -1,6 +1,6 @@
 // Check 8 — Roster Validation
 // Unique employees (Name + Associate ID) from FSM I + FSM II must appear
-// in Roster or Roster II. Flag missing employees with Name and Associate ID.
+// in FSM Roster. Flag missing employees with Name and Associate ID.
 
 import type { CheckResult, LaborRow, RosterEntry } from '../types';
 import { toStr } from '../../lib/num';
@@ -34,7 +34,7 @@ export function check08Roster(
         name: info.name,
         associateId: id,
         totalHours: info.totalHrs.toFixed(2),
-        issue: 'Not found in Roster or Roster II',
+        issue: 'Not found in FSM Roster',
       });
     }
   }

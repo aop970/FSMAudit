@@ -69,6 +69,7 @@ export interface CloudRow {
 export interface RosterEntry {
   name: string;
   associateId: string;
+  type: string;   // FSM I | FSM I Merit | FSM II | FSM II Merit
 }
 
 export interface ShiftRow {
