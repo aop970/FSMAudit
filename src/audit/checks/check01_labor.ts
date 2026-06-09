@@ -56,14 +56,16 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
     const type = r.associateType.toUpperCase().trim();
     const commentLower = r.comments.trim().toLowerCase();
     const isOverTime    = /overtime/i.test(r.comments);
-    const isCADailyOT  = commentLower === 'ca daily overtime';
-    const isCAWeeklyOT = commentLower === 'ca weekly overtime';
-    const isPRDailyOT  = commentLower === 'puerto rico daily ot';
-    const isPRWeeklyOT = commentLower === 'puerto rico weekly ot';
+    const isCADailyOT  = commentLower === 'ca daily overtime' || commentLower === 'ca daily ot';
+    const isCAWeeklyOT = commentLower === 'ca weekly overtime' || commentLower === 'ca weekly ot';
+    // Accept both "...overtime" and "...ot" forms for PR OT labels.
+    const isPRDailyOT  = commentLower === 'puerto rico daily overtime' || commentLower === 'puerto rico daily ot';
+    const isPRWeeklyOT = commentLower === 'puerto rico weekly overtime' || commentLower === 'puerto rico weekly ot';
     const isCA = /^ca$/i.test(r.associateState.trim()) || /california/i.test(r.associateState);
+    const isPR = /^pr$/i.test(r.associateState.trim()) || /puerto rico/i.test(r.associateState);
 
-    // CA Daily/Weekly OT and PR OT always get OT billing; generic Overtime gets OT billing for non-CA only.
-    const useOtBilling = isCADailyOT || isCAWeeklyOT || isPRDailyOT || isPRWeeklyOT || (isOverTime && !isCA);
+    // CA Daily/Weekly OT and PR OT always get OT billing; generic Overtime gets OT billing for non-CA/PR only.
+    const useOtBilling = isCADailyOT || isCAWeeklyOT || isPRDailyOT || isPRWeeklyOT || (isOverTime && !isCA && !isPR);
     const isAnyOT = isOverTime || isCADailyOT || isCAWeeklyOT || isPRDailyOT || isPRWeeklyOT; // used to skip rate check
 
     const { expectedRate, otRate } = resolveRates(r.sheet, rules);

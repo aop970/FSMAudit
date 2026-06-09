@@ -1,50 +1,92 @@
 // Check 17 — OT Math Validation
 // Validates that invoiced OT hours match expected OT hours computed from eligible time.
 //
-// Eligible time types (count toward OT thresholds): Work, Travel, Training, Meeting, Admin
-// Excluded time types (never count):                Time Off, Termed PTO, Bereavement Leave, Overtime,
-//                                                    CA Daily Overtime, CA Weekly Overtime,
-//                                                    Puerto Rico Daily OT, Puerto Rico Weekly OT
-// Unrecognized time types: surfaced as a warning; excluded from OT calc until confirmed.
+// Eligible time types (OT-counting): driven by punchCategories.supported in AuditRules.
+// Excluded time types (non-counting): driven by punchCategories.exceptions in AuditRules.
 //
-// Non-CA employees — Weekly OT (40h threshold, Mon-Sun weeks):
+// ⚠️  BREAK BEHAVIOR CHANGE: punchCategories.supported now includes "Break" by default.
+//     The old hardcoded ELIGIBLE_TYPES did NOT include break. Wiring to config means Break
+//     NOW COUNTS toward OT thresholds. If Break should not count, remove it from
+//     Punch Categories → Supported in the Settings panel.
+//
+// OT row labels are engine-level constants (not configurable):
+//   "Overtime"                — generic label (non-CA/PR weekly OT)
+//   "CA Daily Overtime"       — CA daily OT row (must have single date)
+//   "CA Weekly Overtime"      — CA weekly OT row (date range OK)
+//   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT"
+//   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT"
+//
+// Non-CA/PR employees — Weekly OT (40h threshold, Mon-Sun weeks):
 //   Sum eligible hours per employee per work week. If > 40, expected OT = eligible - 40.
-//   Compare against invoiced Overtime hours for that employee/week.
 //
-// California employees — Greater-of daily vs weekly OT:
+// California AND Puerto Rico employees — Greater-of daily vs weekly OT:
 //   Daily OT  = sum of max(0, eligibleHrsPerDay - 8) across all days in the week
 //   Weekly OT = max(0, totalEligibleHrsInWeek - 40)
 //   Correct OT = max(dailyOT, weeklyOT)
 //
-// Row label rules for CA OT rows:
-//   "CA Daily Overtime"  — must have a single date (null visitDate → HARD STOP)
-//   "CA Weekly Overtime" — date range is fine (null visitDate OK)
-//   "Overtime"           — generic label on CA employee → WARNING, skip validation for that row
+// PR OT row labels:
+//   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT"  — must have single date (HARD STOP if null)
+//   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT" — date range OK
+//   generic "Overtime" on PR employee → same "generic OT label" warning as CA
+//
+// Paid Holiday validation (uses per-program holiday schedule from AuditRules.holidays):
+//   - Wrong hours: visitDate matches a holiday but hours ≠ configured hours
+//   - Off-schedule: visitDate does NOT match any holiday entry
+//   - Missing (FT): FT employee present in the period has no Paid Holiday row on a scheduled date
 //
 // Tolerance: +/-0.05 hours before flagging a fail.
 
 import type { CheckResult, LaborRow } from '../types';
+import { getAuditRules } from '../auditRules';
 
 const TOLERANCE = 0.05;
 
-const ELIGIBLE_TYPES = new Set([
-  'work', 'travel', 'training', 'meeting', 'admin',
-]);
-
-const EXCLUDED_TYPES = new Set([
-  'time off', 'termed pto', 'bereavement leave', 'overtime',
-  'ca daily overtime', 'ca weekly overtime',
-  'puerto rico daily ot', 'puerto rico weekly ot',
-]);
+// ── State classifiers ─────────────────────────────────────────────────────────
 
 function isCA(state: string): boolean {
   const s = state.trim().toLowerCase();
   return s === 'ca' || s === 'california';
 }
 
+function isPR(state: string): boolean {
+  const s = state.trim().toLowerCase();
+  return s === 'pr' || s === 'puerto rico';
+}
+
+/** Returns true for states that use daily+weekly greater-of OT (CA and PR). */
+function isDailyOtState(state: string): boolean {
+  return isCA(state) || isPR(state);
+}
+
+// ── OT label classifiers ──────────────────────────────────────────────────────
+
 function normalizeType(comments: string): string {
   return comments.trim().toLowerCase();
 }
+
+/** Matches both "...overtime" and "...ot" forms for CA/PR daily/weekly OT rows. */
+function isCaDailyOt(t: string): boolean {
+  return t === 'ca daily overtime' || t === 'ca daily ot';
+}
+
+function isCaWeeklyOt(t: string): boolean {
+  return t === 'ca weekly overtime' || t === 'ca weekly ot';
+}
+
+function isPrDailyOt(t: string): boolean {
+  return t === 'puerto rico daily overtime' || t === 'puerto rico daily ot';
+}
+
+function isPrWeeklyOt(t: string): boolean {
+  return t === 'puerto rico weekly overtime' || t === 'puerto rico weekly ot';
+}
+
+/** True if this is any recognized OT-row label (engine level — not in eligible/excluded config). */
+function isOtRowLabel(t: string): boolean {
+  return t === 'overtime' || isCaDailyOt(t) || isCaWeeklyOt(t) || isPrDailyOt(t) || isPrWeeklyOt(t);
+}
+
+// ── Date helpers ──────────────────────────────────────────────────────────────
 
 // Returns ISO week-start date key (Monday) for a given date: "YYYY-MM-DD"
 function weekStartKey(d: Date): string {
@@ -58,6 +100,8 @@ function toDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// ── Formatting ────────────────────────────────────────────────────────────────
+
 // Formats source rows as "TabName: rows 5, 12, 18; TabName2: rows 3, 9"
 function formatLocation(sourceRows: { sheet: string; rowNum: number }[]): string {
   const grouped = new Map<string, Set<number>>();
@@ -70,11 +114,20 @@ function formatLocation(sourceRows: { sheet: string; rowNum: number }[]): string
     .join('; ') || '(no rows tracked)';
 }
 
+// ── Main export ───────────────────────────────────────────────────────────────
+
 export function check17OtMath(
   fsmI: LaborRow[],
   fsmII: LaborRow[],
+  program?: 'fsm' | 'ses',
 ): CheckResult {
   const allRows = [...fsmI, ...fsmII];
+  const rules = getAuditRules(program);
+
+  // Build eligible/excluded sets from config (normalized lowercase).
+  // OT row labels are engine-level and NOT sourced from punchCategories.
+  const configEligible = new Set(rules.punchCategories.supported.map((s) => s.trim().toLowerCase()));
+  const configExcluded = new Set(rules.punchCategories.exceptions.map((s) => s.trim().toLowerCase()));
 
   if (allRows.length === 0) {
     return {
@@ -91,60 +144,69 @@ export function check17OtMath(
 
   const unrecognizedTypeNames = new Set<string>();
   const unrecognizedRows: { sheet: string; rowNum: number; type: string }[] = [];
-  const caGenericOtWarnings: Record<string, unknown>[] = [];
+  const genericOtWarnings: Record<string, unknown>[] = [];
 
   for (const r of allRows) {
     const t = normalizeType(r.comments);
-    if (!ELIGIBLE_TYPES.has(t) && !EXCLUDED_TYPES.has(t)) {
-      // CA employee with generic "Overtime" label → warning (not unrecognized)
-      if (isCA(r.associateState) && t === 'overtime') {
-        caGenericOtWarnings.push({
-          section: 'Warning — CA Generic OT Label',
+    // OT row labels are handled by the engine — skip classification check
+    if (isOtRowLabel(t)) {
+      // Generic "Overtime" on a daily-OT-state employee → warning
+      if (t === 'overtime' && isDailyOtState(r.associateState)) {
+        const stateLabel = isCA(r.associateState) ? 'CA' : 'PR';
+        genericOtWarnings.push({
+          section: `Warning — ${stateLabel} Generic OT Label`,
           sheet: r.sheet,
           row: r.rowNum,
           employeeName: r.employeeName,
           state: r.associateState,
-          issue: "CA OT row uses generic 'Overtime' label — cannot determine daily vs weekly basis. Validation skipped for this row.",
+          issue: `${stateLabel} OT row uses generic 'Overtime' label — cannot determine daily vs weekly basis. Validation skipped for this row.`,
         });
-      } else {
-        const typeName = r.comments.trim() || '(blank)';
-        unrecognizedTypeNames.add(typeName);
-        unrecognizedRows.push({ sheet: r.sheet, rowNum: r.rowNum, type: typeName });
       }
+      continue;
     }
+    // Paid Holiday is handled by the holiday validation section — not unrecognized
+    if (t === 'paid holiday') continue;
+    // Eligible or excluded via config — recognized
+    if (configEligible.has(t) || configExcluded.has(t)) continue;
+    // Truly unrecognized
+    const typeName = r.comments.trim() || '(blank)';
+    unrecognizedTypeNames.add(typeName);
+    unrecognizedRows.push({ sheet: r.sheet, rowNum: r.rowNum, type: typeName });
   }
 
-  // ── CA pre-check: detect date ranges in "CA Daily Overtime" rows ─────────────
-  // "CA Daily Overtime" must have a single date. null visitDate = date range = HARD STOP.
-  // "CA Weekly Overtime" with null visitDate is fine.
+  // ── Daily-OT-state pre-check: "Daily OT" rows must have a single date ────────
+  // CA Daily Overtime and PR Daily Overtime rows must have a visitDate (not a date range).
 
-  const caDailyOtRangeRows = allRows.filter((r) => {
+  const dailyOtRangeRows = allRows.filter((r) => {
     const t = normalizeType(r.comments);
-    return isCA(r.associateState) && t === 'ca daily overtime' && r.visitDate === null;
+    return isDailyOtState(r.associateState) &&
+      (isCaDailyOt(t) || isPrDailyOt(t)) &&
+      r.visitDate === null;
   });
 
-  if (caDailyOtRangeRows.length > 0) {
+  if (dailyOtRangeRows.length > 0) {
+    const stateTypes = [...new Set(dailyOtRangeRows.map((r) => isCA(r.associateState) ? 'CA' : 'PR'))].join('/');
     return {
       checkId: 17,
       checkName: 'OT Math Validation',
       status: 'fail',
-      stats: `CA Daily Overtime rows contain date ranges — exact dates required. ${caDailyOtRangeRows.length} row${caDailyOtRangeRows.length === 1 ? '' : 's'} affected.`,
-      flaggedCount: caDailyOtRangeRows.length,
-      flaggedRows: caDailyOtRangeRows.map((r) => ({
-        section: 'Blocking Error — CA Daily OT Date Ranges',
+      stats: `${stateTypes} Daily Overtime rows contain date ranges — exact dates required. ${dailyOtRangeRows.length} row${dailyOtRangeRows.length === 1 ? '' : 's'} affected.`,
+      flaggedCount: dailyOtRangeRows.length,
+      flaggedRows: dailyOtRangeRows.map((r) => ({
+        section: `Blocking Error — ${isCA(r.associateState) ? 'CA' : 'PR'} Daily OT Date Ranges`,
         sheet: r.sheet,
         row: r.rowNum,
         name: r.employeeName,
         state: r.associateState,
-        issue: 'CA Daily Overtime rows contain date ranges — exact dates required. Please correct and re-upload.',
+        issue: `${isCA(r.associateState) ? 'CA' : 'Puerto Rico'} Daily Overtime rows contain date ranges — exact dates required. Please correct and re-upload.`,
       })),
       details: {
-        blockingError: 'CA Daily Overtime rows contain date ranges — exact dates required. Please correct and re-upload.',
+        blockingError: `${stateTypes} Daily Overtime rows contain date ranges — exact dates required. Please correct and re-upload.`,
       },
     };
   }
 
-  // ── Non-CA: weekly OT (40h threshold) ────────────────────────────────────────
+  // ── Non-CA/PR: weekly OT (40h threshold) ─────────────────────────────────────
 
   type WeekAccum = {
     employeeName: string;
@@ -155,25 +217,22 @@ export function check17OtMath(
     sourceRows: { sheet: string; rowNum: number }[];
   };
 
-  const nonCaWeekMap = new Map<string, WeekAccum>();
-  // Secondary index: "employeeName.lower()|weekNum" → weekKey (ISO Monday date string).
-  // Used to match OT rows that carry a null visitDate (date-range rows) against the
-  // correct employee-week bucket using the numeric "Week" column instead.
-  const nonCaWeekNumIndex = new Map<string, string>();
+  const nonCaPrWeekMap = new Map<string, WeekAccum>();
+  const nonCaPrWeekNumIndex = new Map<string, string>();
 
-  // Pass 1 — accumulate eligible hours (rows always have a visitDate).
+  // Pass 1 — accumulate eligible hours.
   for (const r of allRows) {
-    if (isCA(r.associateState)) continue;
+    if (isDailyOtState(r.associateState)) continue;
     if (!r.visitDate) continue;
 
     const t = normalizeType(r.comments);
-    if (!ELIGIBLE_TYPES.has(t)) continue;
+    if (!configEligible.has(t)) continue;
 
     const wk = weekStartKey(r.visitDate);
     const mapKey = `${r.employeeName.toLowerCase()}|${wk}`;
 
-    if (!nonCaWeekMap.has(mapKey)) {
-      nonCaWeekMap.set(mapKey, {
+    if (!nonCaPrWeekMap.has(mapKey)) {
+      nonCaPrWeekMap.set(mapKey, {
         employeeName: r.employeeName,
         state: r.associateState,
         weekKey: wk,
@@ -182,45 +241,36 @@ export function check17OtMath(
         sourceRows: [],
       });
     }
-    const entry = nonCaWeekMap.get(mapKey)!;
+    const entry = nonCaPrWeekMap.get(mapKey)!;
     entry.eligibleHrs += r.timeHours;
     entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
 
-    // Record week-number → weekKey for this employee (so OT date-range rows can find us).
     if (r.week != null) {
       const numKey = `${r.employeeName.toLowerCase()}|${r.week}`;
-      if (!nonCaWeekNumIndex.has(numKey)) nonCaWeekNumIndex.set(numKey, wk);
+      if (!nonCaPrWeekNumIndex.has(numKey)) nonCaPrWeekNumIndex.set(numKey, wk);
     }
   }
 
   // Pass 2 — accumulate invoiced OT hours.
-  // OT rows on invoices often cover the full Mon–Sun week as a date range, which SheetJS
-  // cannot parse as a Date object — those rows arrive with visitDate === null.
-  // When visitDate is present, use it directly. When null, fall back to the numeric
-  // "Week" column (r.week) to locate the correct employee-week bucket.
   for (const r of allRows) {
-    if (isCA(r.associateState)) continue;
+    if (isDailyOtState(r.associateState)) continue;
     const t = normalizeType(r.comments);
     if (t !== 'overtime') continue;
 
     let mapKey: string | null = null;
 
     if (r.visitDate) {
-      // Single-date OT row — map directly.
       mapKey = `${r.employeeName.toLowerCase()}|${weekStartKey(r.visitDate)}`;
     } else if (r.week != null) {
-      // Date-range OT row — resolve via the week-number index built in pass 1.
-      const wk = nonCaWeekNumIndex.get(`${r.employeeName.toLowerCase()}|${r.week}`);
+      const wk = nonCaPrWeekNumIndex.get(`${r.employeeName.toLowerCase()}|${r.week}`);
       if (wk) mapKey = `${r.employeeName.toLowerCase()}|${wk}`;
     }
 
     if (!mapKey) continue;
 
-    if (!nonCaWeekMap.has(mapKey)) {
-      // OT row exists but no eligible rows found for this employee-week — still track it
-      // so the "OT row exists but no OT expected" failure is surfaced correctly.
+    if (!nonCaPrWeekMap.has(mapKey)) {
       const wk = mapKey.split('|')[1];
-      nonCaWeekMap.set(mapKey, {
+      nonCaPrWeekMap.set(mapKey, {
         employeeName: r.employeeName,
         state: r.associateState,
         weekKey: wk,
@@ -229,19 +279,19 @@ export function check17OtMath(
         sourceRows: [],
       });
     }
-    const entry = nonCaWeekMap.get(mapKey)!;
+    const entry = nonCaPrWeekMap.get(mapKey)!;
     entry.invoicedOtHrs += r.timeHours;
     entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
   }
 
-  const nonCaFailures: Record<string, unknown>[] = [];
+  const nonCaPrFailures: Record<string, unknown>[] = [];
 
-  for (const entry of nonCaWeekMap.values()) {
+  for (const entry of nonCaPrWeekMap.values()) {
     const expectedOt = entry.eligibleHrs > 40 ? entry.eligibleHrs - 40 : 0;
     const diff = Math.abs(expectedOt - entry.invoicedOtHrs);
     if (diff > TOLERANCE) {
-      nonCaFailures.push({
-        section: 'OT Math Validation — Non-CA',
+      nonCaPrFailures.push({
+        section: 'OT Math Validation — Non-CA/PR',
         employeeName: entry.employeeName,
         state: entry.state,
         week: entry.weekKey,
@@ -258,57 +308,40 @@ export function check17OtMath(
     }
   }
 
-  // ── CA: greater-of daily vs weekly OT ────────────────────────────────────────
+  // ── CA + PR: greater-of daily vs weekly OT ────────────────────────────────────
   //
-  // Step 1: Build per-employee, per-week accumulators.
-  //   - Daily eligible: keyed by employee+date
-  //   - Weekly eligible: keyed by employee+week
-  //   - Invoiced OT: sum "CA Daily Overtime" + "CA Weekly Overtime" rows per employee+week
-  //     (generic "Overtime" rows on CA employees are warned above and excluded here)
+  // Both CA and PR employees use the same daily+weekly greater-of logic.
+  // The section label in flaggedRows identifies which state is which.
 
-  type CaWeekAccum = {
+  type DailyOtStateWeekAccum = {
     employeeName: string;
     state: string;
     weekKey: string;
-    // eligible hours per calendar day within this week
     dailyEligible: Map<string, number>; // dateKey → hours
     totalEligibleHrs: number;
     invoicedOtHrs: number;
     sourceRows: { sheet: string; rowNum: number }[];
   };
 
-  const caWeekMap = new Map<string, CaWeekAccum>();
-  // "employeeName.lower()|weekNum" → weekKey (ISO Monday date string).
-  // Used to match CA Weekly OT orphan rows (visitDate=null date-range) to the
-  // correct employee-week bucket via the numeric "Week" column, exactly as
-  // nonCaWeekNumIndex does for non-CA employees.
-  const caWeekNumIndex = new Map<string, string>();
+  const dailyOtStateWeekMap = new Map<string, DailyOtStateWeekAccum>();
+  // "employeeName.lower()|weekNum" → weekKey — for matching Weekly OT orphan rows
+  const dailyOtStateWeekNumIndex = new Map<string, string>();
 
   for (const r of allRows) {
-    if (!isCA(r.associateState)) continue;
+    if (!isDailyOtState(r.associateState)) continue;
 
     const t = normalizeType(r.comments);
-
-    // Determine the week key. For CA Daily OT rows we must have visitDate (enforced above).
-    // For CA Weekly OT rows, visitDate may be null — we skip them for eligible accumulation
-    // but still need to count their hours toward invoiced OT.
-    // For eligible time rows without a date, skip entirely.
     const hasDate = r.visitDate !== null;
     const wk = hasDate ? weekStartKey(r.visitDate!) : null;
 
-    // ── Invoiced OT rows (CA Daily or CA Weekly, dated or date-range) ──────────
-    if (t === 'ca daily overtime' || t === 'ca weekly overtime') {
-      // For CA Weekly OT rows with no date, we can't determine the week key from the row.
-      // We'll handle them separately using a best-effort approach: skip for now if no date.
-      // (CA Daily rows always have dates after the pre-check above.)
-      if (!wk) {
-        // CA Weekly OT row with no date — we can't bin it to a week. Skip from per-week math.
-        // (These rows have no visitDate so we can't map them to a week.)
-        continue;
-      }
+    // ── Invoiced OT rows (dated, CA or PR-specific labels) ───────────────────
+    if (isCaDailyOt(t) || isCaWeeklyOt(t) || isPrDailyOt(t) || isPrWeeklyOt(t)) {
+      // Daily OT rows always have visitDate after the pre-check above.
+      // Weekly OT rows with no date are handled by orphan pass below.
+      if (!wk) continue;
       const mapKey = `${r.employeeName.toLowerCase()}|${wk}`;
-      if (!caWeekMap.has(mapKey)) {
-        caWeekMap.set(mapKey, {
+      if (!dailyOtStateWeekMap.has(mapKey)) {
+        dailyOtStateWeekMap.set(mapKey, {
           employeeName: r.employeeName,
           state: r.associateState,
           weekKey: wk,
@@ -318,22 +351,22 @@ export function check17OtMath(
           sourceRows: [],
         });
       }
-      const caOtEntry = caWeekMap.get(mapKey)!;
-      caOtEntry.invoicedOtHrs += r.timeHours;
-      caOtEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
+      const otEntry = dailyOtStateWeekMap.get(mapKey)!;
+      otEntry.invoicedOtHrs += r.timeHours;
+      otEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
       continue;
     }
 
-    // Generic "Overtime" on CA employee already warned — skip
+    // Generic "Overtime" on daily-OT-state employee → warned above, skip here
     if (t === 'overtime') continue;
 
     // Eligible time — must have a date
     if (!wk || !hasDate) continue;
-    if (!ELIGIBLE_TYPES.has(t)) continue;
+    if (!configEligible.has(t)) continue;
 
     const mapKey = `${r.employeeName.toLowerCase()}|${wk}`;
-    if (!caWeekMap.has(mapKey)) {
-      caWeekMap.set(mapKey, {
+    if (!dailyOtStateWeekMap.has(mapKey)) {
+      dailyOtStateWeekMap.set(mapKey, {
         employeeName: r.employeeName,
         state: r.associateState,
         weekKey: wk,
@@ -343,7 +376,7 @@ export function check17OtMath(
         sourceRows: [],
       });
     }
-    const entry = caWeekMap.get(mapKey)!;
+    const entry = dailyOtStateWeekMap.get(mapKey)!;
     const dk = toDateKey(r.visitDate!);
     entry.dailyEligible.set(dk, (entry.dailyEligible.get(dk) ?? 0) + r.timeHours);
     entry.totalEligibleHrs += r.timeHours;
@@ -351,130 +384,237 @@ export function check17OtMath(
 
     if (r.week != null) {
       const numKey = `${r.employeeName.toLowerCase()}|${r.week}`;
-      if (!caWeekNumIndex.has(numKey)) caWeekNumIndex.set(numKey, wk);
+      if (!dailyOtStateWeekNumIndex.has(numKey)) dailyOtStateWeekNumIndex.set(numKey, wk);
     }
   }
 
-  // Handle CA Weekly OT rows with no visitDate — try to match to existing employee+week buckets
-  // by finding a week bucket for that employee (heuristic: if only one week, assign there).
-  // Collect them first, then assign.
-  const caWeeklyOtOrphans: LaborRow[] = [];
+  // Handle Weekly OT orphan rows (visitDate=null) for CA and PR
+  const weeklyOtOrphans: LaborRow[] = [];
   for (const r of allRows) {
-    if (!isCA(r.associateState)) continue;
+    if (!isDailyOtState(r.associateState)) continue;
     const t = normalizeType(r.comments);
-    if (t === 'ca weekly overtime' && r.visitDate === null) {
-      caWeeklyOtOrphans.push(r);
+    if ((isCaWeeklyOt(t) || isPrWeeklyOt(t)) && r.visitDate === null) {
+      weeklyOtOrphans.push(r);
     }
   }
 
-  if (caWeeklyOtOrphans.length > 0) {
-    for (const r of caWeeklyOtOrphans) {
-      const empKey = r.employeeName.toLowerCase();
-      let mapKey: string | null = null;
+  for (const r of weeklyOtOrphans) {
+    const empKey = r.employeeName.toLowerCase();
+    let mapKey: string | null = null;
 
-      // Primary: use the numeric Week column to find the correct bucket.
-      if (r.week != null) {
-        const wk = caWeekNumIndex.get(`${empKey}|${r.week}`);
-        if (wk) mapKey = `${empKey}|${wk}`;
-      }
+    if (r.week != null) {
+      const wk = dailyOtStateWeekNumIndex.get(`${empKey}|${r.week}`);
+      if (wk) mapKey = `${empKey}|${wk}`;
+    }
 
-      // Fallback: if exactly one week bucket exists for this employee, assign there.
-      if (!mapKey) {
-        const empEntries = Array.from(caWeekMap.entries()).filter(([k]) => k.startsWith(empKey + '|'));
-        if (empEntries.length === 1) mapKey = empEntries[0][0];
-      }
+    if (!mapKey) {
+      const empEntries = Array.from(dailyOtStateWeekMap.entries()).filter(([k]) => k.startsWith(empKey + '|'));
+      if (empEntries.length === 1) mapKey = empEntries[0][0];
+    }
 
-      if (mapKey) {
-        if (!caWeekMap.has(mapKey)) {
-          const wkPart = mapKey.split('|')[1];
-          caWeekMap.set(mapKey, {
-            employeeName: r.employeeName,
-            state: r.associateState,
-            weekKey: wkPart,
-            dailyEligible: new Map(),
-            totalEligibleHrs: 0,
-            invoicedOtHrs: 0,
-            sourceRows: [],
-          });
-        }
-        const orphanEntry = caWeekMap.get(mapKey)!;
-        orphanEntry.invoicedOtHrs += r.timeHours;
-        orphanEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
-      } else {
-        // Cannot determine week — create sentinel bucket so it surfaces as an anomaly.
-        const sentinelKey = `${empKey}|(unknown)`;
-        if (!caWeekMap.has(sentinelKey)) {
-          caWeekMap.set(sentinelKey, {
-            employeeName: r.employeeName,
-            state: r.associateState,
-            weekKey: '(unknown)',
-            dailyEligible: new Map(),
-            totalEligibleHrs: 0,
-            invoicedOtHrs: 0,
-            sourceRows: [],
-          });
-        }
-        const sentinelEntry = caWeekMap.get(sentinelKey)!;
-        sentinelEntry.invoicedOtHrs += r.timeHours;
-        sentinelEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
+    if (mapKey) {
+      if (!dailyOtStateWeekMap.has(mapKey)) {
+        const wkPart = mapKey.split('|')[1];
+        dailyOtStateWeekMap.set(mapKey, {
+          employeeName: r.employeeName,
+          state: r.associateState,
+          weekKey: wkPart,
+          dailyEligible: new Map(),
+          totalEligibleHrs: 0,
+          invoicedOtHrs: 0,
+          sourceRows: [],
+        });
       }
+      const orphanEntry = dailyOtStateWeekMap.get(mapKey)!;
+      orphanEntry.invoicedOtHrs += r.timeHours;
+      orphanEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
+    } else {
+      const sentinelKey = `${empKey}|(unknown)`;
+      if (!dailyOtStateWeekMap.has(sentinelKey)) {
+        dailyOtStateWeekMap.set(sentinelKey, {
+          employeeName: r.employeeName,
+          state: r.associateState,
+          weekKey: '(unknown)',
+          dailyEligible: new Map(),
+          totalEligibleHrs: 0,
+          invoicedOtHrs: 0,
+          sourceRows: [],
+        });
+      }
+      const sentinelEntry = dailyOtStateWeekMap.get(sentinelKey)!;
+      sentinelEntry.invoicedOtHrs += r.timeHours;
+      sentinelEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
     }
   }
 
   const caFailures: Record<string, unknown>[] = [];
+  const prFailures: Record<string, unknown>[] = [];
 
-  for (const entry of caWeekMap.values()) {
-    // Calculate daily OT: sum max(0, dailyHrs - 8) per day
-    let caDailyOt = 0;
+  for (const entry of dailyOtStateWeekMap.values()) {
+    let dailyOt = 0;
     for (const hrs of entry.dailyEligible.values()) {
-      if (hrs > 8) caDailyOt += hrs - 8;
+      if (hrs > 8) dailyOt += hrs - 8;
     }
 
-    const caWeeklyOt = entry.totalEligibleHrs > 40 ? entry.totalEligibleHrs - 40 : 0;
-    const correctOt = Math.max(caDailyOt, caWeeklyOt);
-    const otBasis = caDailyOt >= caWeeklyOt ? 'CA Daily OT' : 'CA Weekly OT';
+    const weeklyOt = entry.totalEligibleHrs > 40 ? entry.totalEligibleHrs - 40 : 0;
+    const correctOt = Math.max(dailyOt, weeklyOt);
+    const otBasis = dailyOt >= weeklyOt ? 'Daily OT' : 'Weekly OT';
+    const stateLabel = isCA(entry.state) ? 'CA' : 'PR';
 
     const diff = Math.abs(correctOt - entry.invoicedOtHrs);
     if (diff > TOLERANCE) {
-      let status: string;
+      let billingStatus: string;
       if (entry.invoicedOtHrs > correctOt + TOLERANCE) {
-        status = 'OVER-BILLED';
+        billingStatus = 'OVER-BILLED';
       } else if (entry.invoicedOtHrs < correctOt - TOLERANCE) {
-        status = 'UNDER-BILLED';
+        billingStatus = 'UNDER-BILLED';
       } else {
-        status = 'MATCH';
+        billingStatus = 'MATCH';
       }
 
-      caFailures.push({
-        section: 'OT Math Validation — CA',
+      const row = {
+        section: `OT Math Validation — ${stateLabel}`,
         employeeName: entry.employeeName,
         state: entry.state,
         week: entry.weekKey,
         location: formatLocation(entry.sourceRows),
-        otBasis,
-        caDailyOtHrs: parseFloat(caDailyOt.toFixed(2)),
-        caWeeklyOtHrs: parseFloat(caWeeklyOt.toFixed(2)),
+        otBasis: `${stateLabel} ${otBasis}`,
+        dailyOtHrs: parseFloat(dailyOt.toFixed(2)),
+        weeklyOtHrs: parseFloat(weeklyOt.toFixed(2)),
         correctOtHrs: parseFloat(correctOt.toFixed(2)),
         invoicedOtHrs: parseFloat(entry.invoicedOtHrs.toFixed(2)),
-        status,
+        status: billingStatus,
         issue: correctOt === 0 && entry.invoicedOtHrs > 0
-          ? 'CA OT row exists but no OT expected'
+          ? `${stateLabel} OT row exists but no OT expected`
           : entry.invoicedOtHrs === 0 && correctOt > 0
-          ? `Expected CA OT (${otBasis}) but no OT row found`
-          : `CA OT hours mismatch (${otBasis})`,
+          ? `Expected ${stateLabel} OT (${otBasis}) but no OT row found`
+          : `${stateLabel} OT hours mismatch (${otBasis})`,
+      };
+
+      if (isCA(entry.state)) {
+        caFailures.push(row);
+      } else {
+        prFailures.push(row);
+      }
+    }
+  }
+
+  // ── Paid Holiday validation ───────────────────────────────────────────────────
+  //
+  // Uses per-program holiday schedule (rules.holidays).
+  // Only validates if there are Paid Holiday rows or a non-empty holiday schedule.
+
+  const holidaySchedule = rules.holidays ?? [];
+  const holidayByDate = new Map<string, { hours: number; name: string }>();
+  for (const h of holidaySchedule) {
+    holidayByDate.set(h.date, { hours: h.hours, name: h.name });
+  }
+
+  const paidHolidayWrongHours: Record<string, unknown>[] = [];
+  const paidHolidayOffSchedule: Record<string, unknown>[] = [];
+  const paidHolidayMissingFt: Record<string, unknown>[] = [];
+
+  const paidHolidayRows = allRows.filter((r) => normalizeType(r.comments) === 'paid holiday');
+
+  // Determine audited period from min/max visitDate in all labor rows.
+  let periodStart: string | null = null;
+  let periodEnd: string | null = null;
+  for (const r of allRows) {
+    if (!r.visitDate) continue;
+    const dk = toDateKey(r.visitDate);
+    if (periodStart === null || dk < periodStart) periodStart = dk;
+    if (periodEnd === null || dk > periodEnd) periodEnd = dk;
+  }
+
+  // Validate individual Paid Holiday rows
+  for (const r of paidHolidayRows) {
+    if (!r.visitDate) continue; // date-range Paid Holiday row — skip individual validation
+    const dk = toDateKey(r.visitDate);
+    const scheduled = holidayByDate.get(dk);
+
+    if (!scheduled) {
+      paidHolidayOffSchedule.push({
+        section: 'Paid Holiday — Off Schedule',
+        sheet: r.sheet,
+        row: r.rowNum,
+        name: r.employeeName,
+        date: dk,
+        hours: r.timeHours,
+        issue: `Paid Holiday on ${dk} is not in the configured holiday schedule.`,
+      });
+    } else if (Math.abs(r.timeHours - scheduled.hours) > TOLERANCE) {
+      paidHolidayWrongHours.push({
+        section: 'Paid Holiday — Wrong Hours',
+        sheet: r.sheet,
+        row: r.rowNum,
+        name: r.employeeName,
+        date: dk,
+        holidayName: scheduled.name,
+        invoicedHours: r.timeHours,
+        expectedHours: scheduled.hours,
+        issue: `Paid Holiday hours ${r.timeHours} do not match configured ${scheduled.hours} for ${scheduled.name} (${dk}).`,
       });
     }
   }
 
+  // Completeness: for each scheduled holiday within the audited period,
+  // flag FT employees present in the data who have no Paid Holiday row on that date.
+  if (periodStart !== null && periodEnd !== null && holidaySchedule.length > 0) {
+    // Build set of FT employees visible in the audited labor data
+    const ftEmployees = new Set<string>();
+    for (const r of allRows) {
+      if (r.associateType.toUpperCase().trim() === 'FT') {
+        ftEmployees.add(r.employeeName.toLowerCase());
+      }
+    }
+
+    // Build set of "employeeName.lower()|date" Paid Holiday rows that exist
+    const paidHolidayCoverage = new Set<string>();
+    for (const r of paidHolidayRows) {
+      if (!r.visitDate) continue;
+      paidHolidayCoverage.add(`${r.employeeName.toLowerCase()}|${toDateKey(r.visitDate)}`);
+    }
+
+    // FT employee → set of employee names (original casing) for reporting
+    const ftNameMap = new Map<string, string>();
+    for (const r of allRows) {
+      if (r.associateType.toUpperCase().trim() === 'FT') {
+        ftNameMap.set(r.employeeName.toLowerCase(), r.employeeName);
+      }
+    }
+
+    for (const holiday of holidaySchedule) {
+      // Only flag holidays within the audited period
+      if (holiday.date < periodStart || holiday.date > periodEnd) continue;
+
+      for (const empLower of ftEmployees) {
+        const coverageKey = `${empLower}|${holiday.date}`;
+        if (!paidHolidayCoverage.has(coverageKey)) {
+          paidHolidayMissingFt.push({
+            section: 'Paid Holiday — Missing (FT)',
+            name: ftNameMap.get(empLower) ?? empLower,
+            date: holiday.date,
+            holidayName: holiday.name,
+            issue: `FT employee has no Paid Holiday row on ${holiday.date} (${holiday.name}).`,
+          });
+        }
+      }
+    }
+  }
+
+  const totalPaidHolidayFails =
+    paidHolidayWrongHours.length + paidHolidayOffSchedule.length + paidHolidayMissingFt.length;
+
   // ── Build result ─────────────────────────────────────────────────────────────
 
-  const totalFailures = nonCaFailures.length + caFailures.length;
+  const caWeekCount = Array.from(dailyOtStateWeekMap.values()).filter((e) => isCA(e.state)).length;
+  const prWeekCount = Array.from(dailyOtStateWeekMap.values()).filter((e) => isPR(e.state)).length;
+  const totalDailyOtFails = caFailures.length + prFailures.length;
+  const totalFailures = nonCaPrFailures.length + totalDailyOtFails + totalPaidHolidayFails;
 
-  const nonCaEmployeeWeekCount = nonCaWeekMap.size;
-  const caEmployeeWeekCount = caWeekMap.size;
-  const totalChecked = nonCaEmployeeWeekCount + caEmployeeWeekCount;
+  const nonCaPrEmployeeWeekCount = nonCaPrWeekMap.size;
+  const totalChecked = nonCaPrEmployeeWeekCount + dailyOtStateWeekMap.size;
 
-  // Warning rows for unrecognized types — one row per occurrence with sheet/row info
   const unrecognizedWarningRows: Record<string, unknown>[] = unrecognizedRows.map((r) => ({
     section: 'Warning — Unrecognized Time Type',
     sheet: r.sheet,
@@ -485,36 +625,52 @@ export function check17OtMath(
 
   const allFlagged = [
     ...unrecognizedWarningRows,
-    ...caGenericOtWarnings,
-    ...nonCaFailures,
+    ...genericOtWarnings,
+    ...nonCaPrFailures,
     ...caFailures,
+    ...prFailures,
+    ...paidHolidayWrongHours,
+    ...paidHolidayOffSchedule,
+    ...paidHolidayMissingFt,
   ];
 
   const parts: string[] = [];
-  if (nonCaEmployeeWeekCount > 0) {
-    parts.push(`${nonCaFailures.length} of ${nonCaEmployeeWeekCount} non-CA employee-week${nonCaEmployeeWeekCount === 1 ? '' : 's'} failed`);
+  if (nonCaPrEmployeeWeekCount > 0) {
+    parts.push(`${nonCaPrFailures.length} of ${nonCaPrEmployeeWeekCount} non-CA/PR employee-week${nonCaPrEmployeeWeekCount === 1 ? '' : 's'} failed`);
   }
-  if (caEmployeeWeekCount > 0) {
-    parts.push(`${caFailures.length} of ${caEmployeeWeekCount} CA employee-week${caEmployeeWeekCount === 1 ? '' : 's'} failed`);
+  if (caWeekCount > 0) {
+    parts.push(`${caFailures.length} of ${caWeekCount} CA employee-week${caWeekCount === 1 ? '' : 's'} failed`);
+  }
+  if (prWeekCount > 0) {
+    parts.push(`${prFailures.length} of ${prWeekCount} PR employee-week${prWeekCount === 1 ? '' : 's'} failed`);
   }
   if (totalChecked === 0) {
     parts.push('No dated labor rows found');
   }
+  if (paidHolidayWrongHours.length > 0) {
+    parts.push(`${paidHolidayWrongHours.length} Paid Holiday wrong-hours row${paidHolidayWrongHours.length === 1 ? '' : 's'}`);
+  }
+  if (paidHolidayOffSchedule.length > 0) {
+    parts.push(`${paidHolidayOffSchedule.length} off-schedule Paid Holiday row${paidHolidayOffSchedule.length === 1 ? '' : 's'}`);
+  }
+  if (paidHolidayMissingFt.length > 0) {
+    parts.push(`${paidHolidayMissingFt.length} missing Paid Holiday (FT) instance${paidHolidayMissingFt.length === 1 ? '' : 's'}`);
+  }
   if (unrecognizedTypeNames.size > 0) {
     parts.push(`${unrecognizedTypeNames.size} unrecognized time type${unrecognizedTypeNames.size === 1 ? '' : 's'} warned`);
   }
-  if (caGenericOtWarnings.length > 0) {
-    parts.push(`${caGenericOtWarnings.length} CA generic OT row${caGenericOtWarnings.length === 1 ? '' : 's'} warned`);
+  if (genericOtWarnings.length > 0) {
+    parts.push(`${genericOtWarnings.length} generic OT row${genericOtWarnings.length === 1 ? '' : 's'} warned`);
   }
 
   const statsStr = parts.join('; ') || 'No OT rows to validate';
 
   let status: CheckResult['status'];
-  if (totalChecked === 0) {
+  if (totalChecked === 0 && paidHolidayRows.length === 0) {
     status = 'na';
   } else if (totalFailures > 0) {
     status = 'fail';
-  } else if (unrecognizedTypeNames.size > 0 || caGenericOtWarnings.length > 0) {
+  } else if (unrecognizedTypeNames.size > 0 || genericOtWarnings.length > 0) {
     status = 'warning';
   } else {
     status = 'pass';
@@ -528,13 +684,19 @@ export function check17OtMath(
     flaggedCount: totalFailures,
     flaggedRows: allFlagged.slice(0, 300),
     details: {
-      nonCaSummary: nonCaEmployeeWeekCount > 0
-        ? `${nonCaFailures.length} of ${nonCaEmployeeWeekCount} non-CA employee-week checks failed`
+      nonCaPrSummary: nonCaPrEmployeeWeekCount > 0
+        ? `${nonCaPrFailures.length} of ${nonCaPrEmployeeWeekCount} non-CA/PR employee-week checks failed`
         : null,
-      caSummary: caEmployeeWeekCount > 0
-        ? `${caFailures.length} of ${caEmployeeWeekCount} CA employee-week checks failed`
+      caSummary: caWeekCount > 0
+        ? `${caFailures.length} of ${caWeekCount} CA employee-week checks failed`
+        : null,
+      prSummary: prWeekCount > 0
+        ? `${prFailures.length} of ${prWeekCount} PR employee-week checks failed`
         : null,
       unrecognizedTypes: unrecognizedTypeNames.size > 0 ? Array.from(unrecognizedTypeNames) : null,
+      paidHolidaySummary: totalPaidHolidayFails > 0
+        ? `${totalPaidHolidayFails} Paid Holiday issue${totalPaidHolidayFails === 1 ? '' : 's'} found`
+        : null,
     },
   };
 }

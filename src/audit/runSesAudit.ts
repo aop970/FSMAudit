@@ -99,7 +99,7 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     checkSes2020co(parsed.fsmIRows),
     checkSesStoreIdFormat(parsed.fsmIRows),
     checkSesPayrollTag(parsed.sesPunchRows, parsed.declaredPeriod),
-    check17OtMath(parsed.fsmIRows, parsed.fsmIIRows),
+    check17OtMath(parsed.fsmIRows, parsed.fsmIIRows, 'ses'),
   ];
 
   const period = parsed.declaredPeriod

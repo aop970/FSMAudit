@@ -15,6 +15,12 @@ export interface CustomRule {
   fieldName?: string;   // for required_field rule type — LaborRow field name to check
 }
 
+export interface HolidayEntry {
+  date: string;   // "YYYY-MM-DD"
+  hours: number;  // expected hours (default 8, allow 4 etc.)
+  name: string;   // e.g. "Thanksgiving"
+}
+
 export interface AuditRules {
   markupRates: {
     ft: number;   // default 0.2993
@@ -49,6 +55,7 @@ export interface AuditRules {
   bragiSystemPrompt: string;
   customRules: CustomRule[];   // user-defined audit constraints, run as Check 15
   otExceptions: { week: number; maxHours: number; note: string }[]; // blanket OT approvals by week
+  holidays: HolidayEntry[];    // per-program holiday schedule for Paid Holiday validation (Check 17)
 }
 
 export const DEFAULT_RULES: AuditRules = {
@@ -92,6 +99,7 @@ export const DEFAULT_RULES: AuditRules = {
   poNumber: 'T26C31H000162',
   customRules: [],
   otExceptions: [],
+  holidays: [],
   bragiSystemPrompt:
     'You are an expert invoice auditor for a field services management program. ' +
     'You will receive a structured JSON summary of audit failures for a specific check. ' +
@@ -117,6 +125,7 @@ export const DEFAULT_SES_RULES: AuditRules = {
   poNumber: 'T26C31H000163',
   customRules: [],
   otExceptions: [],
+  holidays: [],
   bragiSystemPrompt: DEFAULT_RULES.bragiSystemPrompt,
 };
 
@@ -161,6 +170,7 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
     bragiSystemPrompt: stored.bragiSystemPrompt ?? defaults.bragiSystemPrompt,
     customRules: stored.customRules ?? defaults.customRules,
     otExceptions: stored.otExceptions ?? defaults.otExceptions,
+    holidays: stored.holidays ?? defaults.holidays ?? [],
   };
 }
 

@@ -64,7 +64,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check14TermedPto(allFsmI, allFsmII, parsed.mgmtRows, parsed.termedPtoRows),
     check15CustomRules(allFsmI, allFsmII),
     check16RiSundayPremium(allFsmI, allFsmII),
-    check17OtMath(allFsmI, allFsmII),
+    check17OtMath(allFsmI, allFsmII, 'fsm'),
   ];
 
   const period = parsed.declaredPeriod

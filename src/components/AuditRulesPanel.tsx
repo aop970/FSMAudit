@@ -7,6 +7,7 @@ import { useState, useCallback, createContext, useContext } from 'react';
 import {
   type AuditRules,
   type CustomRule,
+  type HolidayEntry,
   type RuleType,
   DEFAULT_RULES,
   DEFAULT_SES_RULES,
@@ -1202,6 +1203,256 @@ function CustomRulesSection({ initial }: { initial: CustomRule[] }) {
   );
 }
 
+// ── Section 8b: Holiday Schedule ─────────────────────────────────────────────
+
+function HolidayScheduleSection({ initial }: { initial: HolidayEntry[] }) {
+  const prog = useProgram();
+  const [rows, setRows] = useState<HolidayEntry[]>(initial);
+  const [saveState, triggerSave] = useSaveState();
+
+  // Per-row edit state
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editDate, setEditDate] = useState('');
+  const [editHours, setEditHours] = useState('');
+  const [editName, setEditName] = useState('');
+
+  // Add-row state
+  const [showAdd, setShowAdd] = useState(false);
+  const [addDate, setAddDate] = useState('');
+  const [addHours, setAddHours] = useState('8');
+  const [addName, setAddName] = useState('');
+
+  const isDirty = JSON.stringify(rows) !== JSON.stringify(initial);
+
+  function persistRows(updated: HolidayEntry[]) {
+    setRows(updated);
+    const ok = saveRulesSection('holidays', updated, prog);
+    triggerSave(ok);
+  }
+
+  function handleAddRow() {
+    if (!addDate || !addName.trim()) return;
+    const hours = parseFloat(addHours);
+    if (!Number.isFinite(hours) || hours <= 0) return;
+    // Ensure YYYY-MM-DD format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(addDate)) return;
+    const updated = [...rows, { date: addDate, hours, name: addName.trim() }]
+      .sort((a, b) => a.date.localeCompare(b.date));
+    persistRows(updated);
+    setAddDate('');
+    setAddHours('8');
+    setAddName('');
+    setShowAdd(false);
+  }
+
+  function handleStartEdit(idx: number) {
+    setEditingIdx(idx);
+    setEditDate(rows[idx].date);
+    setEditHours(String(rows[idx].hours));
+    setEditName(rows[idx].name);
+  }
+
+  function handleSaveEdit(idx: number) {
+    if (!editDate || !editName.trim()) return;
+    const hours = parseFloat(editHours);
+    if (!Number.isFinite(hours) || hours <= 0) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(editDate)) return;
+    const updated = rows
+      .map((r, i) => i === idx ? { date: editDate, hours, name: editName.trim() } : r)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    setEditingIdx(null);
+    persistRows(updated);
+  }
+
+  function handleCancelEdit() {
+    setEditingIdx(null);
+  }
+
+  function handleRemove(idx: number) {
+    persistRows(rows.filter((_, i) => i !== idx));
+  }
+
+  function handleSave() {
+    const ok = saveRulesSection('holidays', rows, prog);
+    triggerSave(ok);
+  }
+
+  function handleReset() {
+    persistRows([]);
+    resetSection('holidays', prog);
+  }
+
+  const rowStyle = {
+    backgroundColor: 'color-mix(in srgb, var(--mc-bg) 85%, transparent)',
+    border: '1px solid var(--mc-card-border)',
+  };
+
+  return (
+    <div className="section-block">
+      <SectionHeader title="Holiday Schedule" dirty={isDirty} />
+      <p className="text-[10px] text-mc-dim mb-3">
+        Per-program paid holiday dates used by Check 17. For each FT employee present
+        in the audited period, Check 17 flags missing Paid Holiday rows, wrong hours,
+        or off-schedule Paid Holiday entries.
+      </p>
+
+      {rows.length > 0 ? (
+        <div className="space-y-2 mb-3">
+          {rows.map((row, idx) =>
+            editingIdx === idx ? (
+              <div key={idx} className="rounded-md px-3 py-2 space-y-2" style={rowStyle}>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-[10px] text-mc-dim mb-0.5 block">Date (YYYY-MM-DD)</span>
+                    <input
+                      type="date"
+                      value={editDate}
+                      onChange={(e) => setEditDate(e.target.value)}
+                      className={inputCls}
+                      style={inputStyle}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] text-mc-dim mb-0.5 block">Hours</span>
+                    <input
+                      type="number"
+                      min="0.5"
+                      step="0.5"
+                      value={editHours}
+                      onChange={(e) => setEditHours(e.target.value)}
+                      className={inputCls}
+                      style={inputStyle}
+                      placeholder="e.g. 8"
+                    />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-[10px] text-mc-dim mb-0.5 block">Holiday Name</span>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className={inputCls}
+                    style={inputStyle}
+                    placeholder="e.g. Thanksgiving"
+                  />
+                </label>
+                <div className="flex items-center gap-2">
+                  <button type="button" className={btnSave} onClick={() => handleSaveEdit(idx)}>
+                    Save
+                  </button>
+                  <button type="button" className={btnReset} onClick={handleCancelEdit}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div key={idx} className="rounded-md px-3 py-2 text-xs flex items-start gap-2" style={rowStyle}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-mc-text">{row.date}</span>
+                    <span className="text-mc-amber text-[10px]">{row.hours}h</span>
+                    <span className="text-mc-dim text-[10px] truncate">{row.name}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleStartEdit(idx)}
+                    className="text-mc-blue hover:text-[#2a8aee] text-[10px] px-1 transition"
+                    title="Edit"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(idx)}
+                    className="text-rose-400/60 hover:text-rose-400 text-[10px] px-1 transition"
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-mc-dim italic mb-3">No holidays configured. Add entries to enable Paid Holiday validation.</p>
+      )}
+
+      {showAdd ? (
+        <div className="rounded-md px-3 py-3 mb-3 space-y-2" style={rowStyle}>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-mc-dim mb-2">New Holiday</p>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="text-[10px] text-mc-dim mb-0.5 block">Date (YYYY-MM-DD)</span>
+              <input
+                type="date"
+                value={addDate}
+                onChange={(e) => setAddDate(e.target.value)}
+                className={inputCls}
+                style={inputStyle}
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-mc-dim mb-0.5 block">Hours</span>
+              <input
+                type="number"
+                min="0.5"
+                step="0.5"
+                value={addHours}
+                onChange={(e) => setAddHours(e.target.value)}
+                className={inputCls}
+                style={inputStyle}
+                placeholder="e.g. 8"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-[10px] text-mc-dim mb-0.5 block">Holiday Name</span>
+            <input
+              type="text"
+              value={addName}
+              onChange={(e) => setAddName(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="e.g. Thanksgiving"
+            />
+          </label>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              className={btnSave}
+              onClick={handleAddRow}
+              disabled={!addDate || !addName.trim() || !addHours}
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              className={btnReset}
+              onClick={() => { setShowAdd(false); setAddDate(''); setAddHours('8'); setAddName(''); }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowAdd(true)}
+          className="text-xs text-mc-blue hover:text-[#2a8aee] font-medium mb-3 transition"
+        >
+          + Add Holiday
+        </button>
+      )}
+
+      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+    </div>
+  );
+}
+
 // ── Section 9: Bragi AI System Prompt ─────────────────────────────────────────
 
 function BragiPromptSection({ initial }: { initial: string }) {
@@ -1302,6 +1553,7 @@ export function AuditRulesPanel({
         <PunchCategoriesSection initial={rules.punchCategories} />
         <OtThresholdSection initial={rules.otThreshold} />
         <OtBlanketApprovalsSection initial={rules.otExceptions} />
+        <HolidayScheduleSection initial={rules.holidays ?? []} />
         <ToleranceSection initial={rules.tolerances} />
         <InvoiceTabsSection initial={rules.invoiceTabs} />
         <PoNumberSection initial={rules.poNumber} />
