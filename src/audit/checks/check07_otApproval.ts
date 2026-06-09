@@ -13,9 +13,11 @@ export function check07OtApproval(
   fsmI: LaborRow[],
   fsmII: LaborRow[],
   otApprovalRows: OtApprovalRow[],
+  program?: 'fsm' | 'ses',
 ): CheckResult {
-  const rules = getAuditRules();
+  const rules = getAuditRules(program);
   const otThreshold = rules.otThreshold;
+  const otExceptions = rules.otExceptions ?? [];
 
   const qualifying = [...fsmI, ...fsmII].filter((r) => {
     const cat = toStr(r.comments).toLowerCase();
@@ -23,6 +25,7 @@ export function check07OtApproval(
   });
 
   const failures: Record<string, unknown>[] = [];
+  const blanketApproved: Record<string, unknown>[] = [];
 
   if (qualifying.length === 0 && otApprovalRows.length === 0) {
     return {
@@ -40,8 +43,25 @@ export function check07OtApproval(
     otApprovalRows.map((r) => toStr(r.associateName).toLowerCase()),
   );
 
-  // Check each qualifying labor row has an OT approval entry
+  // Check each qualifying labor row for blanket approval or OT approval entry
   for (const r of qualifying) {
+    // Check blanket exceptions first
+    const matchingException = otExceptions.find(
+      (ex) => ex.week === r.week && r.timeHours <= ex.maxHours,
+    );
+    if (matchingException) {
+      blanketApproved.push({
+        sheet: r.sheet,
+        row: r.rowNum,
+        name: r.employeeName,
+        hours: r.timeHours.toFixed(2),
+        week: r.week,
+        note: matchingException.note || '(blanket approval)',
+        issue: `Blanket-approved: week ${r.week}, ≤ ${matchingException.maxHours}hrs`,
+      });
+      continue;
+    }
+
     const nameNorm = toStr(r.employeeName).toLowerCase();
     if (!approvedNames.has(nameNorm)) {
       failures.push({
@@ -65,13 +85,29 @@ export function check07OtApproval(
     }
   }
 
+  // Build stats line
+  const statParts: string[] = [
+    `${qualifying.length} OT row(s) > ${otThreshold}hrs`,
+    `${otApprovalRows.length} approval row(s)`,
+  ];
+  if (blanketApproved.length > 0) {
+    const weekList = [...new Set(blanketApproved.map((b) => `week ${b.week}`))].join(', ');
+    statParts.push(`${blanketApproved.length} blanket-approved (${weekList})`);
+  }
+  statParts.push(`${failures.length} issue${failures.length === 1 ? '' : 's'}`);
+
   const pass = failures.length === 0;
+  const allDetails = [
+    ...blanketApproved.map((b) => ({ ...b, section: 'blanketApproved' })),
+    ...failures,
+  ];
+
   return {
     checkId: 7,
     checkName: `OT > ${otThreshold} Hours Approval`,
     status: pass ? 'pass' : 'fail',
-    stats: `${qualifying.length} OT row(s) > ${otThreshold}hrs, ${otApprovalRows.length} approval row(s), ${failures.length} issue${failures.length === 1 ? '' : 's'}`,
+    stats: statParts.join(', '),
     flaggedCount: failures.length,
-    flaggedRows: failures.slice(0, 200),
+    flaggedRows: allDetails.slice(0, 200),
   };
 }

@@ -58,6 +58,18 @@ function toDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// Formats source rows as "TabName: rows 5, 12, 18; TabName2: rows 3, 9"
+function formatLocation(sourceRows: { sheet: string; rowNum: number }[]): string {
+  const grouped = new Map<string, Set<number>>();
+  for (const sr of sourceRows) {
+    if (!grouped.has(sr.sheet)) grouped.set(sr.sheet, new Set());
+    grouped.get(sr.sheet)!.add(sr.rowNum);
+  }
+  return Array.from(grouped.entries())
+    .map(([sheet, rows]) => `${sheet}: rows ${[...rows].sort((a, b) => a - b).join(', ')}`)
+    .join('; ') || '(no rows tracked)';
+}
+
 export function check17OtMath(
   fsmI: LaborRow[],
   fsmII: LaborRow[],
@@ -77,7 +89,8 @@ export function check17OtMath(
 
   // ── Identify unrecognized time types ─────────────────────────────────────────
 
-  const unrecognized = new Set<string>();
+  const unrecognizedTypeNames = new Set<string>();
+  const unrecognizedRows: { sheet: string; rowNum: number; type: string }[] = [];
   const caGenericOtWarnings: Record<string, unknown>[] = [];
 
   for (const r of allRows) {
@@ -94,7 +107,9 @@ export function check17OtMath(
           issue: "CA OT row uses generic 'Overtime' label — cannot determine daily vs weekly basis. Validation skipped for this row.",
         });
       } else {
-        unrecognized.add(r.comments.trim() || '(blank)');
+        const typeName = r.comments.trim() || '(blank)';
+        unrecognizedTypeNames.add(typeName);
+        unrecognizedRows.push({ sheet: r.sheet, rowNum: r.rowNum, type: typeName });
       }
     }
   }
@@ -137,6 +152,7 @@ export function check17OtMath(
     weekKey: string;
     eligibleHrs: number;
     invoicedOtHrs: number;
+    sourceRows: { sheet: string; rowNum: number }[];
   };
 
   const nonCaWeekMap = new Map<string, WeekAccum>();
@@ -163,9 +179,12 @@ export function check17OtMath(
         weekKey: wk,
         eligibleHrs: 0,
         invoicedOtHrs: 0,
+        sourceRows: [],
       });
     }
-    nonCaWeekMap.get(mapKey)!.eligibleHrs += r.timeHours;
+    const entry = nonCaWeekMap.get(mapKey)!;
+    entry.eligibleHrs += r.timeHours;
+    entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
 
     // Record week-number → weekKey for this employee (so OT date-range rows can find us).
     if (r.week != null) {
@@ -207,9 +226,12 @@ export function check17OtMath(
         weekKey: wk,
         eligibleHrs: 0,
         invoicedOtHrs: 0,
+        sourceRows: [],
       });
     }
-    nonCaWeekMap.get(mapKey)!.invoicedOtHrs += r.timeHours;
+    const entry = nonCaWeekMap.get(mapKey)!;
+    entry.invoicedOtHrs += r.timeHours;
+    entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
   }
 
   const nonCaFailures: Record<string, unknown>[] = [];
@@ -223,6 +245,7 @@ export function check17OtMath(
         employeeName: entry.employeeName,
         state: entry.state,
         week: entry.weekKey,
+        location: formatLocation(entry.sourceRows),
         expectedOtHrs: parseFloat(expectedOt.toFixed(2)),
         invoicedOtHrs: parseFloat(entry.invoicedOtHrs.toFixed(2)),
         eligibleHrs: parseFloat(entry.eligibleHrs.toFixed(2)),
@@ -251,6 +274,7 @@ export function check17OtMath(
     dailyEligible: Map<string, number>; // dateKey → hours
     totalEligibleHrs: number;
     invoicedOtHrs: number;
+    sourceRows: { sheet: string; rowNum: number }[];
   };
 
   const caWeekMap = new Map<string, CaWeekAccum>();
@@ -291,9 +315,12 @@ export function check17OtMath(
           dailyEligible: new Map(),
           totalEligibleHrs: 0,
           invoicedOtHrs: 0,
+          sourceRows: [],
         });
       }
-      caWeekMap.get(mapKey)!.invoicedOtHrs += r.timeHours;
+      const caOtEntry = caWeekMap.get(mapKey)!;
+      caOtEntry.invoicedOtHrs += r.timeHours;
+      caOtEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
       continue;
     }
 
@@ -313,12 +340,14 @@ export function check17OtMath(
         dailyEligible: new Map(),
         totalEligibleHrs: 0,
         invoicedOtHrs: 0,
+        sourceRows: [],
       });
     }
     const entry = caWeekMap.get(mapKey)!;
     const dk = toDateKey(r.visitDate!);
     entry.dailyEligible.set(dk, (entry.dailyEligible.get(dk) ?? 0) + r.timeHours);
     entry.totalEligibleHrs += r.timeHours;
+    entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
 
     if (r.week != null) {
       const numKey = `${r.employeeName.toLowerCase()}|${r.week}`;
@@ -365,9 +394,12 @@ export function check17OtMath(
             dailyEligible: new Map(),
             totalEligibleHrs: 0,
             invoicedOtHrs: 0,
+            sourceRows: [],
           });
         }
-        caWeekMap.get(mapKey)!.invoicedOtHrs += r.timeHours;
+        const orphanEntry = caWeekMap.get(mapKey)!;
+        orphanEntry.invoicedOtHrs += r.timeHours;
+        orphanEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
       } else {
         // Cannot determine week — create sentinel bucket so it surfaces as an anomaly.
         const sentinelKey = `${empKey}|(unknown)`;
@@ -379,9 +411,12 @@ export function check17OtMath(
             dailyEligible: new Map(),
             totalEligibleHrs: 0,
             invoicedOtHrs: 0,
+            sourceRows: [],
           });
         }
-        caWeekMap.get(sentinelKey)!.invoicedOtHrs += r.timeHours;
+        const sentinelEntry = caWeekMap.get(sentinelKey)!;
+        sentinelEntry.invoicedOtHrs += r.timeHours;
+        sentinelEntry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
       }
     }
   }
@@ -415,6 +450,7 @@ export function check17OtMath(
         employeeName: entry.employeeName,
         state: entry.state,
         week: entry.weekKey,
+        location: formatLocation(entry.sourceRows),
         otBasis,
         caDailyOtHrs: parseFloat(caDailyOt.toFixed(2)),
         caWeeklyOtHrs: parseFloat(caWeeklyOt.toFixed(2)),
@@ -438,10 +474,14 @@ export function check17OtMath(
   const caEmployeeWeekCount = caWeekMap.size;
   const totalChecked = nonCaEmployeeWeekCount + caEmployeeWeekCount;
 
-  // Warning prefix rows for unrecognized types (displayed before OT results)
-  const unrecognizedWarningRows: Record<string, unknown>[] = unrecognized.size > 0
-    ? [{ section: 'Warning — Unrecognized Time Types', issue: `Unrecognized time types excluded from OT calculations: ${Array.from(unrecognized).join(', ')}` }]
-    : [];
+  // Warning rows for unrecognized types — one row per occurrence with sheet/row info
+  const unrecognizedWarningRows: Record<string, unknown>[] = unrecognizedRows.map((r) => ({
+    section: 'Warning — Unrecognized Time Type',
+    sheet: r.sheet,
+    row: r.rowNum,
+    type: r.type,
+    issue: 'Unrecognized time type — excluded from OT calculations until confirmed.',
+  }));
 
   const allFlagged = [
     ...unrecognizedWarningRows,
@@ -460,8 +500,8 @@ export function check17OtMath(
   if (totalChecked === 0) {
     parts.push('No dated labor rows found');
   }
-  if (unrecognized.size > 0) {
-    parts.push(`${unrecognized.size} unrecognized time type${unrecognized.size === 1 ? '' : 's'} warned`);
+  if (unrecognizedTypeNames.size > 0) {
+    parts.push(`${unrecognizedTypeNames.size} unrecognized time type${unrecognizedTypeNames.size === 1 ? '' : 's'} warned`);
   }
   if (caGenericOtWarnings.length > 0) {
     parts.push(`${caGenericOtWarnings.length} CA generic OT row${caGenericOtWarnings.length === 1 ? '' : 's'} warned`);
@@ -474,7 +514,7 @@ export function check17OtMath(
     status = 'na';
   } else if (totalFailures > 0) {
     status = 'fail';
-  } else if (unrecognized.size > 0 || caGenericOtWarnings.length > 0) {
+  } else if (unrecognizedTypeNames.size > 0 || caGenericOtWarnings.length > 0) {
     status = 'warning';
   } else {
     status = 'pass';
@@ -494,7 +534,7 @@ export function check17OtMath(
       caSummary: caEmployeeWeekCount > 0
         ? `${caFailures.length} of ${caEmployeeWeekCount} CA employee-week checks failed`
         : null,
-      unrecognizedTypes: unrecognized.size > 0 ? Array.from(unrecognized) : null,
+      unrecognizedTypes: unrecognizedTypeNames.size > 0 ? Array.from(unrecognizedTypeNames) : null,
     },
   };
 }

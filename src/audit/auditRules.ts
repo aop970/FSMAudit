@@ -48,6 +48,7 @@ export interface AuditRules {
   poNumber: string;            // default: T26C31H000162 — verified against E17 of first tab
   bragiSystemPrompt: string;
   customRules: CustomRule[];   // user-defined audit constraints, run as Check 15
+  otExceptions: { week: number; maxHours: number; note: string }[]; // blanket OT approvals by week
 }
 
 export const DEFAULT_RULES: AuditRules = {
@@ -90,6 +91,7 @@ export const DEFAULT_RULES: AuditRules = {
   },
   poNumber: 'T26C31H000162',
   customRules: [],
+  otExceptions: [],
   bragiSystemPrompt:
     'You are an expert invoice auditor for a field services management program. ' +
     'You will receive a structured JSON summary of audit failures for a specific check. ' +
@@ -114,6 +116,7 @@ export const DEFAULT_SES_RULES: AuditRules = {
   },
   poNumber: 'T26C31H000163',
   customRules: [],
+  otExceptions: [],
   bragiSystemPrompt: DEFAULT_RULES.bragiSystemPrompt,
 };
 
@@ -157,6 +160,7 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
     poNumber: stored.poNumber ?? defaults.poNumber,
     bragiSystemPrompt: stored.bragiSystemPrompt ?? defaults.bragiSystemPrompt,
     customRules: stored.customRules ?? defaults.customRules,
+    otExceptions: stored.otExceptions ?? defaults.otExceptions,
   };
 }
 

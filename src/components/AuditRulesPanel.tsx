@@ -508,6 +508,258 @@ function OtThresholdSection({ initial }: { initial: number }) {
   );
 }
 
+// ── Section 3b: OT Blanket Approvals ─────────────────────────────────────────
+
+type OtException = AuditRules['otExceptions'][number];
+
+function OtBlanketApprovalsSection({ initial }: { initial: OtException[] }) {
+  const prog = useProgram();
+  const [rows, setRows] = useState<OtException[]>(initial);
+  const [saveState, triggerSave] = useSaveState();
+
+  // Per-row edit state (editing in place)
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [editWeek, setEditWeek] = useState('');
+  const [editMaxHours, setEditMaxHours] = useState('');
+  const [editNote, setEditNote] = useState('');
+
+  // Add-row state
+  const [showAdd, setShowAdd] = useState(false);
+  const [addWeek, setAddWeek] = useState('');
+  const [addMaxHours, setAddMaxHours] = useState('');
+  const [addNote, setAddNote] = useState('');
+
+  const isDirty = JSON.stringify(rows) !== JSON.stringify(initial);
+
+  function persistRows(updated: OtException[]) {
+    setRows(updated);
+    const ok = saveRulesSection('otExceptions', updated, prog);
+    triggerSave(ok);
+  }
+
+  function handleAddRow() {
+    const week = parseInt(addWeek, 10);
+    const maxHours = parseFloat(addMaxHours);
+    if (!Number.isFinite(week) || !Number.isFinite(maxHours) || maxHours <= 0) return;
+    persistRows([...rows, { week, maxHours, note: addNote.trim() }]);
+    setAddWeek('');
+    setAddMaxHours('');
+    setAddNote('');
+    setShowAdd(false);
+  }
+
+  function handleStartEdit(idx: number) {
+    setEditingIdx(idx);
+    setEditWeek(String(rows[idx].week));
+    setEditMaxHours(String(rows[idx].maxHours));
+    setEditNote(rows[idx].note);
+  }
+
+  function handleSaveEdit(idx: number) {
+    const week = parseInt(editWeek, 10);
+    const maxHours = parseFloat(editMaxHours);
+    if (!Number.isFinite(week) || !Number.isFinite(maxHours) || maxHours <= 0) return;
+    const updated = rows.map((r, i) =>
+      i === idx ? { week, maxHours, note: editNote.trim() } : r,
+    );
+    setEditingIdx(null);
+    persistRows(updated);
+  }
+
+  function handleCancelEdit() {
+    setEditingIdx(null);
+  }
+
+  function handleRemove(idx: number) {
+    persistRows(rows.filter((_, i) => i !== idx));
+  }
+
+  function handleSave() {
+    const ok = saveRulesSection('otExceptions', rows, prog);
+    triggerSave(ok);
+  }
+
+  function handleReset() {
+    persistRows([]);
+    resetSection('otExceptions', prog);
+  }
+
+  const rowStyle = {
+    backgroundColor: 'color-mix(in srgb, var(--mc-bg) 85%, transparent)',
+    border: '1px solid var(--mc-card-border)',
+  };
+
+  return (
+    <div className="section-block">
+      <SectionHeader title="OT Blanket Approvals" dirty={isDirty} />
+      <p className="text-[10px] text-mc-dim mb-3">
+        Weeks where OT up to a set hour cap is pre-approved. Check 7 skips the OT Approval tab
+        lookup for any row whose week number and hours match an entry here.
+        Waived rows appear in Check 7 details as blanket-approved.
+      </p>
+
+      {rows.length > 0 ? (
+        <div className="space-y-2 mb-3">
+          {rows.map((row, idx) =>
+            editingIdx === idx ? (
+              <div key={idx} className="rounded-md px-3 py-2 space-y-2" style={rowStyle}>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-[10px] text-mc-dim mb-0.5 block">Week #</span>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={editWeek}
+                      onChange={(e) => setEditWeek(e.target.value)}
+                      className={inputCls}
+                      style={inputStyle}
+                      placeholder="e.g. 14"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] text-mc-dim mb-0.5 block">Max Hours</span>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.25"
+                      value={editMaxHours}
+                      onChange={(e) => setEditMaxHours(e.target.value)}
+                      className={inputCls}
+                      style={inputStyle}
+                      placeholder="e.g. 10"
+                    />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-[10px] text-mc-dim mb-0.5 block">Note (optional)</span>
+                  <input
+                    type="text"
+                    value={editNote}
+                    onChange={(e) => setEditNote(e.target.value)}
+                    className={inputCls}
+                    style={inputStyle}
+                    placeholder="e.g. Manager approved via email 2026-01-15"
+                  />
+                </label>
+                <div className="flex items-center gap-2">
+                  <button type="button" className={btnSave} onClick={() => handleSaveEdit(idx)}>
+                    Save
+                  </button>
+                  <button type="button" className={btnReset} onClick={handleCancelEdit}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div key={idx} className="rounded-md px-3 py-2 text-xs flex items-start gap-2" style={rowStyle}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-mc-text">Week {row.week}</span>
+                    <span className="text-mc-amber text-[10px]">≤ {row.maxHours}hrs</span>
+                  </div>
+                  {row.note && (
+                    <div className="text-mc-dim text-[10px] mt-0.5 truncate">{row.note}</div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleStartEdit(idx)}
+                    className="text-mc-blue hover:text-[#2a8aee] text-[10px] px-1 transition"
+                    title="Edit"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(idx)}
+                    className="text-rose-400/60 hover:text-rose-400 text-[10px] px-1 transition"
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-mc-dim italic mb-3">No blanket approvals configured.</p>
+      )}
+
+      {/* Add row form */}
+      {showAdd ? (
+        <div className="rounded-md px-3 py-3 mb-3 space-y-2" style={rowStyle}>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-mc-dim mb-2">New Exception</p>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="text-[10px] text-mc-dim mb-0.5 block">Week #</span>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={addWeek}
+                onChange={(e) => setAddWeek(e.target.value)}
+                className={inputCls}
+                style={inputStyle}
+                placeholder="e.g. 14"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-mc-dim mb-0.5 block">Max Hours</span>
+              <input
+                type="number"
+                min="0.01"
+                step="0.25"
+                value={addMaxHours}
+                onChange={(e) => setAddMaxHours(e.target.value)}
+                className={inputCls}
+                style={inputStyle}
+                placeholder="e.g. 10"
+              />
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-[10px] text-mc-dim mb-0.5 block">Note (optional)</span>
+            <input
+              type="text"
+              value={addNote}
+              onChange={(e) => setAddNote(e.target.value)}
+              className={inputCls}
+              style={inputStyle}
+              placeholder="e.g. Manager approved via email 2026-01-15"
+            />
+          </label>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              className={btnSave}
+              onClick={handleAddRow}
+              disabled={!addWeek || !addMaxHours}
+            >
+              Add
+            </button>
+            <button type="button" className={btnReset} onClick={() => { setShowAdd(false); setAddWeek(''); setAddMaxHours(''); setAddNote(''); }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowAdd(true)}
+          className="text-xs text-mc-blue hover:text-[#2a8aee] font-medium mb-3 transition"
+        >
+          + Add Exception
+        </button>
+      )}
+
+      <SectionFooter onSave={handleSave} onReset={handleReset} saveState={saveState} />
+    </div>
+  );
+}
+
 // ── Section 4: Tolerance Thresholds ───────────────────────────────────────────
 
 function ToleranceSection({ initial }: { initial: AuditRules['tolerances'] }) {
@@ -1049,6 +1301,7 @@ export function AuditRulesPanel({
         {program === 'fsm' && <OtHourlyRatesSection initial={rules.otHourlyRates} />}
         <PunchCategoriesSection initial={rules.punchCategories} />
         <OtThresholdSection initial={rules.otThreshold} />
+        <OtBlanketApprovalsSection initial={rules.otExceptions} />
         <ToleranceSection initial={rules.tolerances} />
         <InvoiceTabsSection initial={rules.invoiceTabs} />
         <PoNumberSection initial={rules.poNumber} />
