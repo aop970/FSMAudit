@@ -1,3 +1,7 @@
+# FSM Audit Tool
+
+> Source moved to ~/Projects/fsm-audit (2026-06-09) — out of TCC-protected Desktop folder for reliable remote SSH access.
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
