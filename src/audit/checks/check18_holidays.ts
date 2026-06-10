@@ -22,6 +22,17 @@ function normalizeType(comments: string): string {
   return comments.trim().toLowerCase();
 }
 
+// Returns the Monday and Sunday (inclusive) of the Mon–Sun week containing dateKey.
+function getHolidayWeekBounds(dateKey: string): { weekStart: string; weekEnd: string } {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const day = date.getDay(); // 0=Sun, 1=Mon … 6=Sat
+  const daysFromMonday = day === 0 ? 6 : day - 1;
+  const monday = new Date(y, m - 1, d - daysFromMonday);
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+  return { weekStart: toDateKey(monday), weekEnd: toDateKey(sunday) };
+}
+
 export function check18Holidays(
   fsmI: LaborRow[],
   fsmII: LaborRow[],
@@ -101,14 +112,22 @@ export function check18Holidays(
   let holidaysCheckedCount = 0;
 
   if (periodStart !== null && periodEnd !== null && holidaySchedule.length > 0) {
-    // Build set of FT employees visible in the audited labor data
-    const ftEmployees = new Set<string>();
+    // Build map of FT employee → dates they worked (non-holiday rows only).
+    // An employee is only expected to receive holiday pay if they worked during
+    // the Mon–Sun week the holiday falls in.
+    const ftWorkedDates = new Map<string, string[]>();
+    const ftNameMap = new Map<string, string>();
     for (const r of allRows) {
-      if (r.associateType.toUpperCase().trim() === 'FT') {
-        ftEmployees.add(r.employeeName.toLowerCase());
+      if (r.associateType.toUpperCase().trim() !== 'FT') continue;
+      if (!r.visitDate) continue;
+      const empLower = r.employeeName.toLowerCase();
+      ftNameMap.set(empLower, r.employeeName);
+      if (normalizeType(r.comments) !== 'paid holiday') {
+        if (!ftWorkedDates.has(empLower)) ftWorkedDates.set(empLower, []);
+        ftWorkedDates.get(empLower)!.push(toDateKey(r.visitDate));
       }
     }
-    ftEmployeeCount = ftEmployees.size;
+    ftEmployeeCount = ftWorkedDates.size;
 
     // Build set of "employeeName.lower()|date" Paid Holiday rows that exist
     const paidHolidayCoverage = new Set<string>();
@@ -117,20 +136,17 @@ export function check18Holidays(
       paidHolidayCoverage.add(`${r.employeeName.toLowerCase()}|${toDateKey(r.visitDate)}`);
     }
 
-    // FT employee → original casing for reporting
-    const ftNameMap = new Map<string, string>();
-    for (const r of allRows) {
-      if (r.associateType.toUpperCase().trim() === 'FT') {
-        ftNameMap.set(r.employeeName.toLowerCase(), r.employeeName);
-      }
-    }
-
     for (const holiday of holidaySchedule) {
       // Only flag holidays within the audited period
       if (holiday.date < periodStart || holiday.date > periodEnd) continue;
       holidaysCheckedCount++;
 
-      for (const empLower of ftEmployees) {
+      const { weekStart, weekEnd } = getHolidayWeekBounds(holiday.date);
+
+      for (const [empLower, workedDates] of ftWorkedDates) {
+        // Skip employees who didn't work during the holiday week — not eligible
+        if (!workedDates.some((dk) => dk >= weekStart && dk <= weekEnd)) continue;
+
         const coverageKey = `${empLower}|${holiday.date}`;
         if (!paidHolidayCoverage.has(coverageKey)) {
           paidHolidayMissingFt.push({
