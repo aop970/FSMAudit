@@ -20,6 +20,7 @@ import { check14TermedPto } from './checks/check14_termedPto';
 import { check15CustomRules } from './checks/check15_customRules';
 import { check16RiSundayPremium } from './checks/check16_riSundayPremium';
 import { check17OtMath } from './checks/check17_otMath';
+import { check18Holidays } from './checks/check18_holidays';
 import { getAuditRules } from './auditRules';
 
 function fmtDate(d: Date): string {
@@ -65,6 +66,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check15CustomRules(allFsmI, allFsmII),
     check16RiSundayPremium(allFsmI, allFsmII),
     check17OtMath(allFsmI, allFsmII, 'fsm'),
+    check18Holidays(allFsmI, allFsmII, 'fsm'),
   ];
 
   const period = parsed.declaredPeriod

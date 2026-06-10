@@ -1,5 +1,5 @@
 // runSesAudit.ts — SES audit orchestrator. Returns AuditPayload.
-// Runs 18 checks: 1-2,4-15 reuse FSM checks; 3,16,17,18 are SES-specific.
+// Runs 19 checks: 1-2,4-15 reuse FSM checks; 3,16,17,18 are SES-specific; 18=Holiday Pay.
 
 import type { AuditPayload, CheckResult, ControlTableEntry, ParsedData } from './types';
 import { buildSesControlMap } from './sesControlTable';
@@ -19,6 +19,7 @@ import { checkSes2020co } from './checks/checkSes_2020co';
 import { checkSesStoreIdFormat } from './checks/checkSes_storeIdFormat';
 import { checkSesPayrollTag } from './checks/checkSes_payrollTag';
 import { check17OtMath } from './checks/check17_otMath';
+import { check18Holidays } from './checks/check18_holidays';
 import { getAuditRules } from './auditRules';
 
 function fmtDate(d: Date): string {
@@ -100,6 +101,7 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     checkSesStoreIdFormat(parsed.fsmIRows),
     checkSesPayrollTag(parsed.sesPunchRows, parsed.declaredPeriod),
     check17OtMath(parsed.fsmIRows, parsed.fsmIIRows, 'ses'),
+    check18Holidays(parsed.fsmIRows, parsed.fsmIIRows, 'ses'),
   ];
 
   const period = parsed.declaredPeriod

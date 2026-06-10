@@ -1,5 +1,6 @@
 // Check 17 — OT Math Validation
 // Validates that invoiced OT hours match expected OT hours computed from eligible time.
+// Paid Holiday validation has been moved to Check 18 (check18_holidays.ts).
 //
 // Eligible time types (OT-counting): driven by punchCategories.supported in AuditRules.
 // Excluded time types (non-counting): driven by punchCategories.exceptions in AuditRules.
@@ -28,11 +29,6 @@
 //   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT"  — must have single date (HARD STOP if null)
 //   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT" — date range OK
 //   generic "Overtime" on PR employee → same "generic OT label" warning as CA
-//
-// Paid Holiday validation (uses per-program holiday schedule from AuditRules.holidays):
-//   - Wrong hours: visitDate matches a holiday but hours ≠ configured hours
-//   - Off-schedule: visitDate does NOT match any holiday entry
-//   - Missing (FT): FT employee present in the period has no Paid Holiday row on a scheduled date
 //
 // Tolerance: +/-0.05 hours before flagging a fail.
 
@@ -164,8 +160,6 @@ export function check17OtMath(
       }
       continue;
     }
-    // Paid Holiday is handled by the holiday validation section — not unrecognized
-    if (t === 'paid holiday') continue;
     // Eligible or excluded via config — recognized
     if (configEligible.has(t) || configExcluded.has(t)) continue;
     // Truly unrecognized
@@ -499,118 +493,12 @@ export function check17OtMath(
     }
   }
 
-  // ── Paid Holiday validation ───────────────────────────────────────────────────
-  //
-  // Uses per-program holiday schedule (rules.holidays).
-  // Only validates if there are Paid Holiday rows or a non-empty holiday schedule.
-
-  const holidaySchedule = rules.holidays ?? [];
-  const holidayByDate = new Map<string, { hours: number; name: string }>();
-  for (const h of holidaySchedule) {
-    holidayByDate.set(h.date, { hours: h.hours, name: h.name });
-  }
-
-  const paidHolidayWrongHours: Record<string, unknown>[] = [];
-  const paidHolidayOffSchedule: Record<string, unknown>[] = [];
-  const paidHolidayMissingFt: Record<string, unknown>[] = [];
-
-  const paidHolidayRows = allRows.filter((r) => normalizeType(r.comments) === 'paid holiday');
-
-  // Determine audited period from min/max visitDate in all labor rows.
-  let periodStart: string | null = null;
-  let periodEnd: string | null = null;
-  for (const r of allRows) {
-    if (!r.visitDate) continue;
-    const dk = toDateKey(r.visitDate);
-    if (periodStart === null || dk < periodStart) periodStart = dk;
-    if (periodEnd === null || dk > periodEnd) periodEnd = dk;
-  }
-
-  // Validate individual Paid Holiday rows
-  for (const r of paidHolidayRows) {
-    if (!r.visitDate) continue; // date-range Paid Holiday row — skip individual validation
-    const dk = toDateKey(r.visitDate);
-    const scheduled = holidayByDate.get(dk);
-
-    if (!scheduled) {
-      paidHolidayOffSchedule.push({
-        section: 'Paid Holiday — Off Schedule',
-        sheet: r.sheet,
-        row: r.rowNum,
-        name: r.employeeName,
-        date: dk,
-        hours: r.timeHours,
-        issue: `Paid Holiday on ${dk} is not in the configured holiday schedule.`,
-      });
-    } else if (Math.abs(r.timeHours - scheduled.hours) > TOLERANCE) {
-      paidHolidayWrongHours.push({
-        section: 'Paid Holiday — Wrong Hours',
-        sheet: r.sheet,
-        row: r.rowNum,
-        name: r.employeeName,
-        date: dk,
-        holidayName: scheduled.name,
-        invoicedHours: r.timeHours,
-        expectedHours: scheduled.hours,
-        issue: `Paid Holiday hours ${r.timeHours} do not match configured ${scheduled.hours} for ${scheduled.name} (${dk}).`,
-      });
-    }
-  }
-
-  // Completeness: for each scheduled holiday within the audited period,
-  // flag FT employees present in the data who have no Paid Holiday row on that date.
-  if (periodStart !== null && periodEnd !== null && holidaySchedule.length > 0) {
-    // Build set of FT employees visible in the audited labor data
-    const ftEmployees = new Set<string>();
-    for (const r of allRows) {
-      if (r.associateType.toUpperCase().trim() === 'FT') {
-        ftEmployees.add(r.employeeName.toLowerCase());
-      }
-    }
-
-    // Build set of "employeeName.lower()|date" Paid Holiday rows that exist
-    const paidHolidayCoverage = new Set<string>();
-    for (const r of paidHolidayRows) {
-      if (!r.visitDate) continue;
-      paidHolidayCoverage.add(`${r.employeeName.toLowerCase()}|${toDateKey(r.visitDate)}`);
-    }
-
-    // FT employee → set of employee names (original casing) for reporting
-    const ftNameMap = new Map<string, string>();
-    for (const r of allRows) {
-      if (r.associateType.toUpperCase().trim() === 'FT') {
-        ftNameMap.set(r.employeeName.toLowerCase(), r.employeeName);
-      }
-    }
-
-    for (const holiday of holidaySchedule) {
-      // Only flag holidays within the audited period
-      if (holiday.date < periodStart || holiday.date > periodEnd) continue;
-
-      for (const empLower of ftEmployees) {
-        const coverageKey = `${empLower}|${holiday.date}`;
-        if (!paidHolidayCoverage.has(coverageKey)) {
-          paidHolidayMissingFt.push({
-            section: 'Paid Holiday — Missing (FT)',
-            name: ftNameMap.get(empLower) ?? empLower,
-            date: holiday.date,
-            holidayName: holiday.name,
-            issue: `FT employee has no Paid Holiday row on ${holiday.date} (${holiday.name}).`,
-          });
-        }
-      }
-    }
-  }
-
-  const totalPaidHolidayFails =
-    paidHolidayWrongHours.length + paidHolidayOffSchedule.length + paidHolidayMissingFt.length;
-
   // ── Build result ─────────────────────────────────────────────────────────────
 
   const caWeekCount = Array.from(dailyOtStateWeekMap.values()).filter((e) => isCA(e.state)).length;
   const prWeekCount = Array.from(dailyOtStateWeekMap.values()).filter((e) => isPR(e.state)).length;
   const totalDailyOtFails = caFailures.length + prFailures.length;
-  const totalFailures = nonCaPrFailures.length + totalDailyOtFails + totalPaidHolidayFails;
+  const totalFailures = nonCaPrFailures.length + totalDailyOtFails;
 
   const nonCaPrEmployeeWeekCount = nonCaPrWeekMap.size;
   const totalChecked = nonCaPrEmployeeWeekCount + dailyOtStateWeekMap.size;
@@ -629,9 +517,6 @@ export function check17OtMath(
     ...nonCaPrFailures,
     ...caFailures,
     ...prFailures,
-    ...paidHolidayWrongHours,
-    ...paidHolidayOffSchedule,
-    ...paidHolidayMissingFt,
   ];
 
   const parts: string[] = [];
@@ -647,15 +532,6 @@ export function check17OtMath(
   if (totalChecked === 0) {
     parts.push('No dated labor rows found');
   }
-  if (paidHolidayWrongHours.length > 0) {
-    parts.push(`${paidHolidayWrongHours.length} Paid Holiday wrong-hours row${paidHolidayWrongHours.length === 1 ? '' : 's'}`);
-  }
-  if (paidHolidayOffSchedule.length > 0) {
-    parts.push(`${paidHolidayOffSchedule.length} off-schedule Paid Holiday row${paidHolidayOffSchedule.length === 1 ? '' : 's'}`);
-  }
-  if (paidHolidayMissingFt.length > 0) {
-    parts.push(`${paidHolidayMissingFt.length} missing Paid Holiday (FT) instance${paidHolidayMissingFt.length === 1 ? '' : 's'}`);
-  }
   if (unrecognizedTypeNames.size > 0) {
     parts.push(`${unrecognizedTypeNames.size} unrecognized time type${unrecognizedTypeNames.size === 1 ? '' : 's'} warned`);
   }
@@ -666,7 +542,7 @@ export function check17OtMath(
   const statsStr = parts.join('; ') || 'No OT rows to validate';
 
   let status: CheckResult['status'];
-  if (totalChecked === 0 && paidHolidayRows.length === 0) {
+  if (totalChecked === 0) {
     status = 'na';
   } else if (totalFailures > 0) {
     status = 'fail';
@@ -694,9 +570,6 @@ export function check17OtMath(
         ? `${prFailures.length} of ${prWeekCount} PR employee-week checks failed`
         : null,
       unrecognizedTypes: unrecognizedTypeNames.size > 0 ? Array.from(unrecognizedTypeNames) : null,
-      paidHolidaySummary: totalPaidHolidayFails > 0
-        ? `${totalPaidHolidayFails} Paid Holiday issue${totalPaidHolidayFails === 1 ? '' : 's'} found`
-        : null,
     },
   };
 }

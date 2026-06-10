@@ -55,7 +55,7 @@ export interface AuditRules {
   bragiSystemPrompt: string;
   customRules: CustomRule[];   // user-defined audit constraints, run as Check 15
   otExceptions: { week: number; maxHours: number; note: string }[]; // blanket OT approvals by week
-  holidays: HolidayEntry[];    // per-program holiday schedule for Paid Holiday validation (Check 17)
+  holidays: HolidayEntry[];    // per-program holiday schedule for Paid Holiday validation (Check 18)
 }
 
 export const DEFAULT_RULES: AuditRules = {
@@ -99,7 +99,16 @@ export const DEFAULT_RULES: AuditRules = {
   poNumber: 'T26C31H000162',
   customRules: [],
   otExceptions: [],
-  holidays: [],
+  holidays: [
+    { date: '2026-06-19', hours: 4,  name: 'Juneteenth' },
+    { date: '2026-07-04', hours: 8,  name: 'Independence Day' },
+    { date: '2026-09-07', hours: 8,  name: 'Labor Day Fed' },
+    { date: '2026-11-11', hours: 4,  name: 'Veterans Day' },
+    { date: '2026-11-26', hours: 8,  name: 'Thanksgiving Day' },
+    { date: '2026-12-24', hours: 8,  name: 'Christmas Eve' },
+    { date: '2026-12-25', hours: 8,  name: 'Christmas Day' },
+    { date: '2026-12-31', hours: 4,  name: "New Year's Eve" },
+  ],
   bragiSystemPrompt:
     'You are an expert invoice auditor for a field services management program. ' +
     'You will receive a structured JSON summary of audit failures for a specific check. ' +
@@ -125,7 +134,16 @@ export const DEFAULT_SES_RULES: AuditRules = {
   poNumber: 'T26C31H000163',
   customRules: [],
   otExceptions: [],
-  holidays: [],
+  holidays: [
+    { date: '2026-06-19', hours: 4,  name: 'Juneteenth' },
+    { date: '2026-07-04', hours: 8,  name: 'Independence Day' },
+    { date: '2026-09-07', hours: 8,  name: 'Labor Day Fed' },
+    { date: '2026-11-11', hours: 4,  name: 'Veterans Day' },
+    { date: '2026-11-26', hours: 8,  name: 'Thanksgiving Day' },
+    { date: '2026-12-24', hours: 8,  name: 'Christmas Eve' },
+    { date: '2026-12-25', hours: 8,  name: 'Christmas Day' },
+    { date: '2026-12-31', hours: 4,  name: "New Year's Eve" },
+  ],
   bragiSystemPrompt: DEFAULT_RULES.bragiSystemPrompt,
 };
 
