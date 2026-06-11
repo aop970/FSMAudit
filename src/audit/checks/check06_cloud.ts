@@ -106,22 +106,27 @@ export function check06Cloud(cloudRows: CloudRow[], mgmtRows: MgmtRow[]): CheckR
     }
   }
 
-  // Every manager in the management table must have a row on the Cloud Services tab
+  // Every manager in the management table must have a row on the Cloud Services tab.
+  // This cross-check only runs when the cloud tab has at least one manager-typed row
+  // (i.e. "Type of License" contains "manager"). Formats without that column (e.g. SES)
+  // have no manager rows, so the cross-check is skipped to avoid false positives.
   const cloudMgrIds = new Set(
     cloudRows
       .filter((r) => r.licenseType.toLowerCase().includes('manager'))
       .map((r) => r.associateId.toUpperCase()),
   );
-  for (const [id, alloc] of mgmtAllocMap) {
-    if (!cloudMgrIds.has(id)) {
-      const mgmtRow = mgmtRows.find((m) => m.associateId.toUpperCase() === id);
-      failures.push({
-        name: mgmtRow?.name ?? id,
-        id,
-        licenseType: 'Cloud Services Manager',
-        expectedAlloc: (alloc * 100).toFixed(2) + '%',
-        issue: 'Manager present in Management Detail Hours but missing from Cloud Services tab',
-      });
+  if (cloudMgrIds.size > 0) {
+    for (const [id, alloc] of mgmtAllocMap) {
+      if (!cloudMgrIds.has(id)) {
+        const mgmtRow = mgmtRows.find((m) => m.associateId.toUpperCase() === id);
+        failures.push({
+          name: mgmtRow?.name ?? id,
+          id,
+          licenseType: 'Cloud Services Manager',
+          expectedAlloc: (alloc * 100).toFixed(2) + '%',
+          issue: 'Manager present in Management Detail Hours but missing from Cloud Services tab',
+        });
+      }
     }
   }
 
