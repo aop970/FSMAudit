@@ -102,7 +102,7 @@ export async function runTieredAnalysis(
   apiKey: string,
   allResults: CheckResult[],
   parsedData: ParsedData | null,
-  program: 'fsm' | 'ses' | undefined,
+  program: 'fsm' | 'ses' | 'ci' | undefined,
   onProgress: ProgressCallback,
 ): Promise<TieredAnalysisResult> {
   const rules = getAuditRules(program);
@@ -178,7 +178,7 @@ export async function runDeepDive(
   apiKey: string,
   targetResult: CheckResult,
   allResults: CheckResult[],
-  program: 'fsm' | 'ses' | undefined,
+  program: 'fsm' | 'ses' | 'ci' | undefined,
   onProgress: ProgressCallback,
 ): Promise<CallResult> {
   const rules = getAuditRules(program);

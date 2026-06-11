@@ -24,7 +24,7 @@ const ROLE_STYLE: Record<FileRole, { bg: string; text: string }> = {
 };
 
 export interface MultiDropZoneProps {
-  program:       'fsm' | 'ses';
+  program:       'fsm' | 'ses' | 'ci';
   invoiceFile:   File | null;
   punchFile:     File | null;
   timeOffFile1:  File | null;
@@ -41,6 +41,19 @@ export interface MultiDropZoneProps {
   onRef:       (f: File | null) => void;
   onShift1:    (f: File | null) => void;
   onShift2:    (f: File | null) => void;
+  // CI-specific BUP reference uploads
+  ciActivityFile1: File | null;
+  ciActivityFile2: File | null;
+  ciActivityFile3: File | null;
+  ciActivityFile4: File | null;
+  ciRosterFile:    File | null;
+  ciTimeOffFile:   File | null;
+  onCiActivity1: (f: File | null) => void;
+  onCiActivity2: (f: File | null) => void;
+  onCiActivity3: (f: File | null) => void;
+  onCiActivity4: (f: File | null) => void;
+  onCiRoster:    (f: File | null) => void;
+  onCiTimeOff:   (f: File | null) => void;
 }
 
 interface SlotDef {
@@ -59,6 +72,10 @@ export function MultiDropZone({
   shiftFile1, shiftFile2,
   onInvoice, onPunch, onTimeOff1, onTimeOff2, onTermedPto, onRef,
   onShift1, onShift2,
+  ciActivityFile1, ciActivityFile2, ciActivityFile3, ciActivityFile4,
+  ciRosterFile, ciTimeOffFile,
+  onCiActivity1, onCiActivity2, onCiActivity3, onCiActivity4,
+  onCiRoster, onCiTimeOff,
 }: MultiDropZoneProps) {
   // General multi-file drop input (drag-and-drop path)
   const dropInputRef  = useRef<HTMLInputElement>(null);
@@ -136,19 +153,19 @@ export function MultiDropZone({
     },
     {
       role: 'punch', label: 'Punch Detail', file: punchFile, onFile: onPunch,
-      accept: '.csv,.xlsx,.xlsb', visible: true,
+      accept: '.csv,.xlsx,.xlsb', visible: program !== 'ci',
     },
     {
       role: 'timeOff', label: 'Time Off (Wk 1)', file: timeOffFile1, onFile: onTimeOff1,
-      accept: '.xlsx,.xlsb', visible: true,
+      accept: '.xlsx,.xlsb', visible: program !== 'ci',
     },
     {
       role: 'timeOff', label: 'Time Off (Wk 2)', file: timeOffFile2, onFile: onTimeOff2,
-      accept: '.xlsx,.xlsb', visible: !!timeOffFile1,
+      accept: '.xlsx,.xlsb', visible: program !== 'ci' && !!timeOffFile1,
     },
     {
       role: 'termedPto', label: 'Termed PTO', file: termedPtoFile, onFile: onTermedPto,
-      accept: '.xlsx,.xlsb', visible: true,
+      accept: '.xlsx,.xlsb', visible: program !== 'ci',
     },
     ...(program === 'fsm' ? [{
       role: 'reference' as FileRole, label: 'Reference CSV', file: refFile, onFile: onRef,
@@ -163,6 +180,14 @@ export function MultiDropZone({
         role: 'shift' as FileRole, label: 'Shift Report (Wk 2)', file: shiftFile2, onFile: onShift2,
         accept: '.xlsx,.xlsb', visible: !!shiftFile1,
       },
+    ] : []),
+    ...(program === 'ci' ? [
+      { role: 'punch' as FileRole,     label: 'Activity (Wk 1)', file: ciActivityFile1, onFile: onCiActivity1, accept: '.xlsx,.xlsb', visible: true },
+      { role: 'punch' as FileRole,     label: 'Activity (Wk 2)', file: ciActivityFile2, onFile: onCiActivity2, accept: '.xlsx,.xlsb', visible: !!ciActivityFile1 },
+      { role: 'punch' as FileRole,     label: 'Activity (Wk 3)', file: ciActivityFile3, onFile: onCiActivity3, accept: '.xlsx,.xlsb', visible: !!ciActivityFile2 },
+      { role: 'punch' as FileRole,     label: 'Activity (Wk 4)', file: ciActivityFile4, onFile: onCiActivity4, accept: '.xlsx,.xlsb', visible: !!ciActivityFile3 },
+      { role: 'reference' as FileRole, label: 'BUP Roster',      file: ciRosterFile,    onFile: onCiRoster,    accept: '.xlsx,.xlsb', visible: true },
+      { role: 'timeOff' as FileRole,   label: 'Time Off',         file: ciTimeOffFile,   onFile: onCiTimeOff,   accept: '.xlsx,.xlsb', visible: true },
     ] : []),
   ];
 

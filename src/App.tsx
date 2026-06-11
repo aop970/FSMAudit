@@ -17,11 +17,13 @@ import {
   getControlTableTimestamp,
 } from './audit/controlTable';
 import { loadSesControlTable, saveSesControlTable } from './audit/sesControlTable';
-import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile, parseSesInvoice } from './audit/parseWorkbook';
+import { loadCiControlTable } from './audit/ciControlTable';
+import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile, parseSesInvoice, parseCiInvoice } from './audit/parseWorkbook';
 import { runAudit } from './audit/runAudit';
 import { runSesAudit } from './audit/runSesAudit';
+import { runCiAudit } from './audit/runCiAudit';
 import { getAuditRules } from './audit/auditRules';
-import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow, ParsedData } from './audit/types';
+import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow, ParsedData, CiControlEntry, CiParsedData } from './audit/types';
 import { runTieredAnalysis } from './ai/bragiClient';
 import type { EmailEntry } from './ai/bragiClient';
 import type { AnalyzeAllState } from './components/AnalyzeAllButton';
@@ -69,7 +71,7 @@ function deriveOverallStatus(results: AuditPayload['results']): 'pass' | 'fail' 
 
 export default function App() {
   // Program selector
-  const [program, setProgram] = useState<'fsm' | 'ses'>('fsm');
+  const [program, setProgram] = useState<'fsm' | 'ses' | 'ci'>('fsm');
 
   // File state
   const [invoiceFile, setInvoiceFile]       = useState<File | null>(null);
@@ -80,6 +82,12 @@ export default function App() {
   const [termedPtoFile, setTermedPtoFile]   = useState<File | null>(null);
   const [shiftFile1, setShiftFile1]         = useState<File | null>(null);
   const [shiftFile2, setShiftFile2]         = useState<File | null>(null);
+  const [ciActivityFile1, setCiActivityFile1] = useState<File | null>(null);
+  const [ciActivityFile2, setCiActivityFile2] = useState<File | null>(null);
+  const [ciActivityFile3, setCiActivityFile3] = useState<File | null>(null);
+  const [ciActivityFile4, setCiActivityFile4] = useState<File | null>(null);
+  const [ciRosterFile, setCiRosterFile]       = useState<File | null>(null);
+  const [ciTimeOffFile, setCiTimeOffFile]     = useState<File | null>(null);
   const [emailFile, setEmailFile]           = useState<File | null>(null);
   const [emailEntries, setEmailEntries]     = useState<EmailEntry[]>([]);
   const [emailParseError, setEmailParseError] = useState<string | null>(null);
@@ -90,11 +98,12 @@ export default function App() {
   const [statusMsg, setStatusMsg]     = useState('');
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
   const [payload, setPayload]         = useState<AuditPayload | null>(null);
-  const [parsedData, setParsedData]   = useState<ParsedData | null>(null);
+  const [parsedData, setParsedData]   = useState<ParsedData | CiParsedData | null>(null);
 
   // Control tables
   const [controlTable, setControlTable] = useState<ControlTableEntry[]>(() => loadControlTable());
   const [sesControlTable, setSesControlTable] = useState<ControlTableEntry[]>(() => loadSesControlTable());
+  const [ciControlTable, setCiControlTable] = useState<CiControlEntry[]>(() => loadCiControlTable());
   const [, setCtTimestamp]   = useState<string | null>(() => getControlTableTimestamp());
 
   // API key — env var baked at build time, overridable via localStorage
@@ -133,8 +142,8 @@ export default function App() {
       const tiered = await runTieredAnalysis(
         apiKey,
         payload.results,
-        parsedData,
-        program,
+        parsedData as ParsedData | null,
+        program === 'ci' ? undefined : program,
         (msg) => setAaProgress(msg),
       );
       setAaOutput(tiered.reportMarkdown);
@@ -166,11 +175,14 @@ export default function App() {
   useEffect(() => {
     getAuditRules('fsm'); // seeds defaults into localStorage if not present
     getAuditRules('ses');
+    getAuditRules('ci'); // seed CI defaults
     const ct = loadControlTable();
     setControlTable(ct);
     setCtTimestamp(getControlTableTimestamp());
     const sesCt = loadSesControlTable();
     setSesControlTable(sesCt);
+    const ciCt = loadCiControlTable();
+    setCiControlTable(ciCt);
   }, []);
 
   // When a reference CSV is uploaded, parse and save control table override
@@ -221,7 +233,20 @@ export default function App() {
     setStatusMsg('Reading invoice workbook…');
 
     try {
-      if (program === 'ses') {
+      if (program === 'ci') {
+        const activityFiles = [ciActivityFile1, ciActivityFile2, ciActivityFile3, ciActivityFile4].filter(Boolean) as File[];
+        const ciParsed = await parseCiInvoice(invoiceFile, activityFiles, ciRosterFile, ciTimeOffFile);
+
+        setStatusMsg('Running CI audit checks…');
+        setAppState('auditing');
+        await new Promise((r) => setTimeout(r, 0));
+
+        const result = runCiAudit(ciParsed, ciControlTable);
+        setPayload(result);
+        setParsedData(ciParsed);
+        setAppState('done');
+        setStatusMsg('');
+      } else if (program === 'ses') {
         const parsed = await parseSesInvoice(invoiceFile, punchFile, shiftFile1, shiftFile2);
 
         // Parse time off files and inject
@@ -309,6 +334,12 @@ export default function App() {
     setTermedPtoFile(null);
     setShiftFile1(null);
     setShiftFile2(null);
+    setCiActivityFile1(null);
+    setCiActivityFile2(null);
+    setCiActivityFile3(null);
+    setCiActivityFile4(null);
+    setCiRosterFile(null);
+    setCiTimeOffFile(null);
     setEmailFile(null);
     setEmailEntries([]);
     setEmailParseError(null);
@@ -347,7 +378,7 @@ export default function App() {
               className="flex rounded-lg overflow-hidden mb-4"
               style={{ border: '1px solid var(--mc-card-border)' }}
             >
-              {(['fsm', 'ses'] as const).map((p) => (
+              {(['fsm', 'ses', 'ci'] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -358,7 +389,7 @@ export default function App() {
                     color: program === p ? '#fff' : 'var(--mc-text-dim)',
                   }}
                 >
-                  {p === 'fsm' ? 'FSM' : 'SES'}
+                  {p === 'fsm' ? 'FSM' : p === 'ses' ? 'SES' : 'CI'}
                 </button>
               ))}
             </div>
@@ -383,6 +414,18 @@ export default function App() {
                 onRef={setRefFile}
                 onShift1={setShiftFile1}
                 onShift2={setShiftFile2}
+                ciActivityFile1={ciActivityFile1}
+                ciActivityFile2={ciActivityFile2}
+                ciActivityFile3={ciActivityFile3}
+                ciActivityFile4={ciActivityFile4}
+                ciRosterFile={ciRosterFile}
+                ciTimeOffFile={ciTimeOffFile}
+                onCiActivity1={setCiActivityFile1}
+                onCiActivity2={setCiActivityFile2}
+                onCiActivity3={setCiActivityFile3}
+                onCiActivity4={setCiActivityFile4}
+                onCiRoster={setCiRosterFile}
+                onCiTimeOff={setCiTimeOffFile}
               />
             </div>
 
@@ -594,7 +637,7 @@ export default function App() {
 
           {/* Run button */}
           <div className="mt-auto space-y-2">
-            {(invoiceFile || punchFile || timeOffFile1 || timeOffFile2 || termedPtoFile || shiftFile1 || shiftFile2 || emailFile || payload) && (
+            {(invoiceFile || punchFile || timeOffFile1 || timeOffFile2 || termedPtoFile || shiftFile1 || shiftFile2 || ciActivityFile1 || ciRosterFile || ciTimeOffFile || emailFile || payload) && (
               <button
                 type="button"
                 onClick={reset}

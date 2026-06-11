@@ -21,5 +21,6 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/App 2.tsx", "src/ai/ai 2", "src/assets/assets 2", "src/components/components 2", "src/lib/lib 2"]
 }

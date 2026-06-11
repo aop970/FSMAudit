@@ -10,7 +10,7 @@ interface CheckCardProps {
   allResults?: CheckResult[];
   defaultOpen?: boolean;
   apiKey: string;
-  program?: 'fsm' | 'ses';
+  program?: 'fsm' | 'ses' | 'ci';
   onTokensUsed?: (inputTokens: number, outputTokens: number) => void;
   // External AI output can be injected from the synthesis pass
   externalAiOutput?: string;

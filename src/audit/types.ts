@@ -104,6 +104,91 @@ export interface TimeOffRow {
   status: string;
 }
 
+export interface CiActivityRow {
+  rowNum: number;
+  employeeName: string;
+  associateId: string;
+  jobTitle: string;
+  visitDate: Date | null;
+  timeIn: string;
+  timeOut: string;
+  timeHours: number;
+  isOt: boolean;
+}
+
+export interface CiRosterRow {
+  rowNum: number;
+  associateId: string;
+  employeeName: string;
+  notes: string;          // e.g. "CI-B" — invoice letter assignment
+  type: string;           // MGR / FT
+  managerName: string;
+  storeState: string;
+  hourlyPayRate: number;
+  startDate: Date | null;
+  type3: string;          // e.g. "Invoice K"
+}
+
+export interface CiControlEntry {
+  name: string;
+  associateId: string;
+  role: string;
+  invoiceLetter: string;
+  billFormat: 'Monthly' | 'Hourly';
+  baseRate: number;
+  state: string;
+  status: 'active' | 'inactive';
+}
+
+export interface CiCoverMeta {
+  invoiceNumber: string | null;
+  tabName: string | null;
+  activityDateStart: Date | null;
+  activityDateEnd: Date | null;
+  poNumber: string | null;
+  invoiceDate: Date | null;
+  dueDate: Date | null;
+  totalDue: number | null;
+  attn: string | null;
+  billTo: string | null;
+  remitTo: string | null;
+}
+
+export interface CiDetailRow {
+  sheet: string;
+  rowNum: number;
+  employeeName: string;
+  associateId: string;
+  visitDate: Date | null;
+  week: number | null;
+  timeHours: number;
+  otHours: number;
+  basePayRate: number;
+  preMarkUpTotal: number;
+  muValue: number;
+  muFormula?: string;
+  salaryTotal: number;
+  billValue: number;
+  billFormula?: string;
+  layoutType: 'Monthly' | 'Hourly';
+  comments: string;
+}
+
+export interface CiParsedData {
+  fileName: string;
+  coverMeta: CiCoverMeta;
+  detailRows: CiDetailRow[];
+  cloudTotal: number;
+  newHireFeeTotal: number;
+  tieOutInvoiceTotal: number | null;
+  weeksCovered: number[];
+  tabNames: string[];
+  crossTabNotes: string[];
+  activityRows: CiActivityRow[];     // from BUP Activity files
+  ciRosterRows: CiRosterRow[];       // from BUP Roster
+  timeOffRows: TimeOffRow[];         // from BUP Time Off
+}
+
 export interface TermedPtoRow {
   rowNum: number;
   employeeId: string;
