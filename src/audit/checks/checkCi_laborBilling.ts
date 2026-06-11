@@ -90,11 +90,17 @@ export function checkCiLaborBilling(
         });
       }
     } else {
-      // Hourly layout: Bill = BasePayRate × TimeHours × 1.30
-      const baseBill = r.basePayRate * r.timeHours * 1.30;
+      // Hourly layout: Bill = BasePayRate × Hours × 1.30.
+      // Regular rows carry TimeHours; separate Overtime rows carry OtHours with
+      // TimeHours blank (0). Validate against total billable hours so OT rows are
+      // not falsely flagged as $0-expected. The OT row stores its own rate in
+      // basePayRate, so a single (timeHours + otHours) term covers both cases.
+      const billableHours = r.timeHours + r.otHours;
+      const baseBill = r.basePayRate * billableHours * 1.30;
       const expectedBill = Math.round(baseBill * 100) / 100;
 
       if (Math.abs(r.billValue - expectedBill) > tolerance) {
+        const isOtRow = r.timeHours === 0 && r.otHours > 0;
         failures.push({
           rowNum: r.rowNum,
           sheet: r.sheet,
@@ -103,8 +109,11 @@ export function checkCiLaborBilling(
           visitDate: r.visitDate ? r.visitDate.toLocaleDateString() : '',
           layoutType: r.layoutType,
           timeHours: r.timeHours,
+          otHours: r.otHours,
           basePayRate: fmtMoney(r.basePayRate),
-          issue: 'Hourly bill amount mismatch (expected BasePayRate × Hours × 1.30)',
+          issue: isOtRow
+            ? 'Overtime bill amount mismatch (expected BasePayRate × OtHours × 1.30)'
+            : 'Hourly bill amount mismatch (expected BasePayRate × Hours × 1.30)',
           expectedBill: fmtMoney(expectedBill),
           invoicedBill: fmtMoney(r.billValue),
           difference: fmtMoney(Math.abs(r.billValue - expectedBill)),

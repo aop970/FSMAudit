@@ -129,13 +129,22 @@ function getTimeOffFile(bupDir: string): NodeFile | null {
 async function runFixture(): Promise<void> {
   const controlTable = loadCiControlTable();
 
-  // Collect BUP files from all 4 weeks
+  // Collect BUP files from all 4 weeks, de-duplicated by filename.
+  // The weekly BUP folders overlap (e.g. "Activity 05.10.xlsx" is present byte-
+  // identical in both W19 and W20). Loading both copies double-counts that week's
+  // hours and produces spurious Activity-recon mismatches. A real single-upload-
+  // per-week run would not include duplicates, so de-dupe by basename here.
+  const seenActivity = new Set<string>();
   const activityFiles = [
     ...getActivityFiles(BUP_W19),
     ...getActivityFiles(BUP_W20),
     ...getActivityFiles(BUP_W21),
     ...getActivityFiles(BUP_W22),
-  ];
+  ].filter((f) => {
+    if (seenActivity.has(f.name)) return false;
+    seenActivity.add(f.name);
+    return true;
+  });
   const rosterFile = getRosterFile(BUP_W22) ?? getRosterFile(BUP_W19);
   const timeOffFile = getTimeOffFile(BUP_W22) ?? getTimeOffFile(BUP_W19);
 

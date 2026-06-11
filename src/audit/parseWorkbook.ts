@@ -1105,10 +1105,26 @@ export async function parseSesInvoice(
 // ── CI (Cloud Identity) invoice parsers ───────────────────────────────────────
 
 // Tab names to skip when probing for per-role detail tabs
+// Tabs that must never be treated as billable Detail tabs during per-role probing.
+// Matched exact OR prefix (see isCiExcludedTab). Back-office/reference tabs plus the
+// known E-variant noise tabs (Log/PM List/Hours Detail/Invoice Detail/Sheet*).
 const CI_EXCLUDE_TABS = [
   'cloud services', 'new hire fees', 'tie-out', 'invoice schedule',
-  'sow', 'bqms po', 'log', 'ytd', 'invoice summary',
+  'sow', 'bqms po', 'log', 'invoice summary',
+  'pm list', 'hours detail', 'invoice detail', 'sheet', 'expenses',
 ];
+
+// Substring markers: a tab containing any of these is reference/YTD/log noise, never
+// a billable per-role Detail tab. Catches "2026 Detail YTD", "2025 Detail YTD",
+// "Log Summary", "Log Detail" (which end with, not start with, the marker).
+const CI_EXCLUDE_TAB_SUBSTRINGS = ['ytd', 'log'];
+
+// True if a tab name should be skipped by the per-role Detail probe.
+function isCiExcludedTab(lower: string): boolean {
+  if (CI_EXCLUDE_TABS.some((ex) => lower === ex || lower.startsWith(ex))) return true;
+  if (CI_EXCLUDE_TAB_SUBSTRINGS.some((ex) => lower.includes(ex))) return true;
+  return false;
+}
 
 /**
  * Label-anchored cover reader. Scans the first ~25 rows of the first tab,
@@ -1535,7 +1551,7 @@ export async function parseCiInvoice(
     // Skip cover tab (index 0), explicit detail tab if already handled, and excluded tabs
     if (lower === coverTabName.trim().toLowerCase()) continue;
     if (explicitDetail && lower === explicitDetail.name.trim().toLowerCase()) continue;
-    if (CI_EXCLUDE_TABS.some((ex) => lower === ex || lower.startsWith(ex))) continue;
+    if (isCiExcludedTab(lower)) continue;
 
     const ws = wb.Sheets[tabName];
     if (!ws) continue;

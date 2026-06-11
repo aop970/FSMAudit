@@ -37,12 +37,16 @@ export function checkCiActivityRecon(
     const billFormat = entry?.billFormat ?? r.layoutType;
     if (billFormat !== 'Hourly') continue; // skip Monthly for per-day recon
 
+    // Include OT hours: separate Overtime rows carry hours in otHours with
+    // timeHours blank. The Activity clock total covers regular + OT punches, so
+    // the invoiced side must sum both to reconcile per person/day.
+    const billedHours = r.timeHours + r.otHours;
     const key = `${r.associateId}|${dateKey(r.visitDate)}`;
     const existing = invoiceMap.get(key);
     if (existing) {
-      existing.hours += r.timeHours;
+      existing.hours += billedHours;
     } else {
-      invoiceMap.set(key, { hours: r.timeHours, name: r.employeeName });
+      invoiceMap.set(key, { hours: billedHours, name: r.employeeName });
     }
   }
 
