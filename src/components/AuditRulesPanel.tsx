@@ -20,7 +20,7 @@ import {
 
 // ── Program context (avoids prop-drilling to every section) ───────────────────
 
-const ProgramCtx = createContext<'fsm' | 'ses'>('fsm');
+const ProgramCtx = createContext<'fsm' | 'ses' | 'ci'>('fsm');
 function useProgram() { return useContext(ProgramCtx); }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ function HourlyRatesSection({
   program: programProp,
 }: {
   initial: AuditRules['hourlyRates'];
-  program: 'fsm' | 'ses';
+  program: 'fsm' | 'ses' | 'ci';
 }) {
   const prog = useProgram();
   const program = programProp ?? prog;
@@ -1498,7 +1498,7 @@ export function AuditRulesPanel({
   program = 'fsm',
   onClose,
 }: {
-  program?: 'fsm' | 'ses';
+  program?: 'fsm' | 'ses' | 'ci';
   onClose: () => void;
 }) {
   // Load current rules fresh on panel open

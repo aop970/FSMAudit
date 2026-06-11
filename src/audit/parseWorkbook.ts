@@ -4,7 +4,18 @@
 
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+
+// xlsx's ESM bundle (xlsx.mjs) does not re-export SSF as a named namespace member
+// in all bundler/tsx contexts. Resolve it defensively so both Vite (browser) and
+// tsx (Node fixture) work correctly.
+const _XLSX = XLSX as unknown as Record<string, unknown>;
+const XlsxSSF = (
+  XLSX.SSF ??
+  (_XLSX['default'] as Record<string, unknown> | undefined)?.SSF ??
+  (_XLSX['module.exports'] as Record<string, unknown> | undefined)?.SSF
+) as typeof XLSX.SSF;
 import type {
+  CiActivityRow, CiCoverMeta, CiDetailRow, CiParsedData, CiRosterRow,
   CloudRow, LaborRow, MgmtRow, OtApprovalRow,
   ParsedData, PunchRow, RosterEntry, SesPunchRow, ShiftRow, TermedPtoRow, TieOutData, TimeOffRow,
 } from './types';
@@ -16,7 +27,7 @@ function toDate(v: unknown): Date | null {
   if (v == null || v === '') return null;
   if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
   if (typeof v === 'number') {
-    const d = XLSX.SSF.parse_date_code(v);
+    const d = XlsxSSF.parse_date_code(v);
     if (!d) return null;
     return new Date(d.y, d.m - 1, d.d);
   }
@@ -424,7 +435,7 @@ function parseDate(s: string): Date | null {
   const n = Number(s);
   if (!isNaN(n) && n > 40000) {
     // Excel serial
-    const d = XLSX.SSF.parse_date_code(n);
+    const d = XlsxSSF.parse_date_code(n);
     if (d) return new Date(d.y, d.m - 1, d.d);
   }
   const d = new Date(s);
@@ -527,7 +538,7 @@ export async function parseTermedPtoFile(file: File): Promise<TermedPtoRow[]> {
     const rawDate = cDate >= 0 ? row[cDate] : null;
     let termDate: Date | null = null;
     if (typeof rawDate === 'number' && rawDate > 0) {
-      const d = XLSX.SSF.parse_date_code(rawDate);
+      const d = XlsxSSF.parse_date_code(rawDate);
       if (d) termDate = new Date(d.y, d.m - 1, d.d);
     } else if (rawDate instanceof Date) {
       termDate = isNaN(rawDate.getTime()) ? null : rawDate;
@@ -616,7 +627,7 @@ export async function parseTimeOffFile(file: File): Promise<TimeOffRow[]> {
     const rawDate = row[cDate];
     let timeOffDate: Date | null = null;
     if (typeof rawDate === 'number' && rawDate > 0) {
-      const d = XLSX.SSF.parse_date_code(rawDate);
+      const d = XlsxSSF.parse_date_code(rawDate);
       if (d) timeOffDate = new Date(d.y, d.m - 1, d.d);
     } else if (rawDate) {
       const d = new Date(toStr(rawDate));
@@ -1088,5 +1099,540 @@ export async function parseSesInvoice(
     termedPtoRows: [],
     shiftRows,
     sesPunchRows,
+  };
+}
+
+// ── CI (Cloud Identity) invoice parsers ───────────────────────────────────────
+
+// Tab names to skip when probing for per-role detail tabs
+const CI_EXCLUDE_TABS = [
+  'cloud services', 'new hire fees', 'tie-out', 'invoice schedule',
+  'sow', 'bqms po', 'log', 'ytd', 'invoice summary',
+];
+
+/**
+ * Label-anchored cover reader. Scans the first ~25 rows of the first tab,
+ * looking for label strings and reading the value one cell to the right (or
+ * one cell below if right is empty).
+ */
+export function parseCiCoverTab(wb: XLSX.WorkBook): CiCoverMeta {
+  const coverName = wb.SheetNames[0];
+  const result: CiCoverMeta = {
+    invoiceNumber: null,
+    tabName: coverName ?? null,
+    activityDateStart: null,
+    activityDateEnd: null,
+    poNumber: null,
+    invoiceDate: null,
+    dueDate: null,
+    totalDue: null,
+    attn: null,
+    billTo: null,
+    remitTo: null,
+  };
+  if (!coverName) return result;
+
+  const ws = wb.Sheets[coverName];
+  if (!ws) return result;
+
+  // Use blankrows: true so that the AoA row index matches the worksheet row index,
+  // which is required for XLSX.utils.encode_cell to address the correct cells.
+  const aoa = XLSX.utils.sheet_to_json(ws, {
+    header: 1, raw: true, defval: null, blankrows: true,
+  }) as unknown[][];
+
+  // Helper: read cell value right of (r,c), or below if right is empty.
+  // Does NOT fall through to "below" if the below cell looks like another label
+  // (a string ending in ":" is typically a field name, not a value).
+  function readAdjacentValue(r: number, c: number): unknown {
+    const right = XLSX.utils.encode_cell({ r, c: c + 1 });
+    const rightCell = ws[right] as XLSX.CellObject | undefined;
+    if (rightCell?.v != null && rightCell.v !== '') return rightCell.v;
+    const below = XLSX.utils.encode_cell({ r: r + 1, c });
+    const belowCell = ws[below] as XLSX.CellObject | undefined;
+    if (belowCell?.v == null) return null;
+    // Reject if the below cell is itself a label (string ending in ":")
+    const belowStr = String(belowCell.v).trim();
+    if (belowStr.endsWith(':') || /^[A-Za-z\s]+#?:/.test(belowStr)) return null;
+    return belowCell.v;
+  }
+
+  const scanRows = Math.min(25, aoa.length);
+  for (let rowIdx = 0; rowIdx < scanRows; rowIdx++) {
+    const row = aoa[rowIdx] || [];
+    for (let colIdx = 0; colIdx < row.length; colIdx++) {
+      const cell = toStr(row[colIdx]).toLowerCase();
+      if (!cell) continue;
+
+      if (cell.startsWith('invoice #:') || cell === 'invoice #') {
+        result.invoiceNumber = result.invoiceNumber ?? (toStr(readAdjacentValue(rowIdx, colIdx)) || null);
+      } else if (cell.startsWith('activity dates:') || cell === 'activity dates') {
+        const raw = toStr(readAdjacentValue(rowIdx, colIdx));
+        const m = raw.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})\s*[-–—]\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+        if (m) {
+          const s = new Date(m[1]);
+          const e = new Date(m[2]);
+          if (!isNaN(s.getTime())) result.activityDateStart = s;
+          if (!isNaN(e.getTime())) result.activityDateEnd = e;
+        }
+      } else if (cell.startsWith('po#:') || cell === 'po#') {
+        result.poNumber = result.poNumber ?? (toStr(readAdjacentValue(rowIdx, colIdx)) || null);
+      } else if (cell.startsWith('invoice date:') || cell === 'invoice date') {
+        result.invoiceDate = result.invoiceDate ?? toDate(readAdjacentValue(rowIdx, colIdx));
+      } else if (cell.startsWith('due date:') || cell === 'due date') {
+        result.dueDate = result.dueDate ?? toDate(readAdjacentValue(rowIdx, colIdx));
+      } else if (cell.startsWith('total due:') || cell === 'total due') {
+        if (result.totalDue == null) {
+          const n = toNum(readAdjacentValue(rowIdx, colIdx));
+          result.totalDue = n !== 0 ? n : null;
+        }
+      } else if (cell.startsWith('attn:') || cell === 'attn') {
+        result.attn = result.attn ?? (toStr(readAdjacentValue(rowIdx, colIdx)) || null);
+      } else if (cell.startsWith('bill to:') || cell.startsWith('bill-to:') ||
+                 cell === 'bill to' || cell === 'bill-to') {
+        result.billTo = result.billTo ?? (toStr(readAdjacentValue(rowIdx, colIdx)) || null);
+      } else if (cell.startsWith('remit to:') || cell.startsWith('remit-to:') ||
+                 cell === 'remit to' || cell === 'remit-to') {
+        result.remitTo = result.remitTo ?? (toStr(readAdjacentValue(rowIdx, colIdx)) || null);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Detects Monthly or Hourly layout from a CI detail worksheet and returns
+ * the parsed rows.
+ */
+export function parseCiDetailTab(ws: XLSX.WorkSheet, sheetName: string): CiDetailRow[] {
+  const aoa = readAoA(ws);
+  if (aoa.length < 2) return [];
+
+  // Detect header row (first 6 rows)
+  let hIdx = -1;
+  let isMonthly = false;
+
+  for (let i = 0; i < Math.min(6, aoa.length); i++) {
+    const row = aoa[i] || [];
+    const vals = row.map((c) => toStr(c).toLowerCase());
+    const has = (s: string) => vals.some((v) => v.includes(s));
+
+    const monthlySignal = has('hourly rate') && has('hours') && (has('pre mark up') || has('markup') || has('mu'));
+    const hourlySignal  = has('base pay rate') && (has('time hours') || has('base total') || has('mark up'));
+
+    if (monthlySignal || hourlySignal) {
+      hIdx = i;
+      isMonthly = monthlySignal && !hourlySignal;
+      // If both match, prefer hourly (more specific signal)
+      if (monthlySignal && hourlySignal) {
+        isMonthly = has('salary total') && !has('base pay rate');
+      }
+      break;
+    }
+  }
+
+  if (hIdx < 0) return [];
+
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const col = (...aliases: string[]) => {
+    for (const a of aliases) {
+      const idx = headers.indexOf(a.toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    for (const a of aliases) {
+      const idx = headers.findIndex((h) => h.includes(a.toLowerCase()));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const cName   = col('employee name', 'associate name', 'name');
+  const cId     = col('associate id', 'id');
+  const cDate   = col('visit date', 'date in', 'date');
+  const cWeek   = col('week');
+
+  const out: CiDetailRow[] = [];
+
+  if (isMonthly) {
+    // Monthly layout
+    const cBase     = col('hourly rate');
+    const cHours    = col('hours', 'time hours');
+    const cPreMu    = col('pre mark up total', 'pre mark up', 'pre markup total', 'pre markup');
+    const cMu       = col('mu', 'markup', 'mark up');
+    const cSalTotal = col('salary total', 'total');
+
+    for (let i = hIdx + 1; i < aoa.length; i++) {
+      const row = aoa[i] || [];
+      if (row.every((v) => v == null || v === '')) continue;
+
+      const name     = cName >= 0 ? toStr(row[cName]) : '';
+      const id       = cId   >= 0 ? toStr(row[cId])   : '';
+      const timeHrs  = cHours >= 0 ? toNum(row[cHours]) : 0;
+
+      // Skip rows with no employee identity — they are subtotal/footer rows.
+      if (!name && !id) continue;
+      if (!name && !id && !timeHrs) continue;
+
+      const muFormula   = cMu      >= 0 ? getCellFormula(ws, i, cMu)      : undefined;
+      const billFormula = cSalTotal >= 0 ? getCellFormula(ws, i, cSalTotal) : undefined;
+      const salTotal    = cSalTotal >= 0 ? toNum(row[cSalTotal]) : 0;
+
+      out.push({
+        sheet: sheetName,
+        rowNum: i + 1,
+        employeeName: name,
+        associateId: id,
+        visitDate:   cDate >= 0 ? toDate(row[cDate]) : null,
+        week:        cWeek >= 0 && row[cWeek] != null ? (toNum(row[cWeek]) || null) : null,
+        timeHours:   timeHrs,
+        otHours:     0,
+        basePayRate: cBase  >= 0 ? toNum(row[cBase])  : 0,
+        preMarkUpTotal: cPreMu >= 0 ? toNum(row[cPreMu]) : 0,
+        muValue:     cMu    >= 0 ? toNum(row[cMu])    : 0,
+        muFormula,
+        salaryTotal: salTotal,
+        billValue:   salTotal,
+        billFormula,
+        layoutType:  'Monthly',
+        comments:    '',
+      });
+    }
+  } else {
+    // Hourly layout
+    const cBase      = col('base pay rate', 'base rate');
+    const cTimeHrs   = col('time hours', 'hours');
+    const cOtHrs     = col('overtime hours', 'ot hours');
+    const cBaseTotal = col('base total');
+    const cMarkUp    = col('mark up', 'markup');
+    const cMuTotal   = col('mark up total', 'markup total');
+    const cBill      = col('bill');
+
+    for (let i = hIdx + 1; i < aoa.length; i++) {
+      const row = aoa[i] || [];
+      if (row.every((v) => v == null || v === '')) continue;
+
+      const name    = cName    >= 0 ? toStr(row[cName]) : '';
+      const id      = cId      >= 0 ? toStr(row[cId])   : '';
+      const timeHrs = cTimeHrs >= 0 ? toNum(row[cTimeHrs]) : 0;
+
+      // Skip rows with no employee identity — they are subtotal/footer rows.
+      if (!name && !id) continue;
+      if (!name && !id && !timeHrs) continue;
+
+      const muFormula   = cMarkUp >= 0 ? getCellFormula(ws, i, cMarkUp)  : undefined;
+      const billFormula = cBill   >= 0 ? getCellFormula(ws, i, cBill)    : undefined;
+
+      out.push({
+        sheet: sheetName,
+        rowNum: i + 1,
+        employeeName: name,
+        associateId:  id,
+        visitDate:    cDate >= 0 ? toDate(row[cDate]) : null,
+        week:         cWeek >= 0 && row[cWeek] != null ? (toNum(row[cWeek]) || null) : null,
+        timeHours:    timeHrs,
+        otHours:      cOtHrs >= 0 ? toNum(row[cOtHrs]) : 0,
+        basePayRate:  cBase  >= 0 ? toNum(row[cBase])  : 0,
+        preMarkUpTotal: cBaseTotal >= 0 ? toNum(row[cBaseTotal]) : 0,
+        muValue:      cMuTotal >= 0 ? toNum(row[cMuTotal]) : (cMarkUp >= 0 ? toNum(row[cMarkUp]) : 0),
+        muFormula,
+        salaryTotal:  0,
+        billValue:    cBill >= 0 ? toNum(row[cBill]) : 0,
+        billFormula,
+        layoutType:   'Hourly',
+        comments:     '',
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Parse a BUP Activity XLSX file into CiActivityRow[].
+ */
+export async function parseCiActivityFile(file: File): Promise<CiActivityRow[]> {
+  const buf = await readBuf(file);
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  } catch {
+    return [];
+  }
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return [];
+
+  const aoa = readAoA(ws);
+  if (aoa.length < 2) return [];
+
+  // Find header row — look for "Associate" or "Associate ID"
+  let hIdx = -1;
+  for (let i = 0; i < Math.min(10, aoa.length); i++) {
+    const row = aoa[i] || [];
+    if (row.some((c) => {
+      const s = toStr(c).toLowerCase();
+      return s === 'associate' || s === 'associate id' || s.includes('associate id');
+    })) {
+      hIdx = i; break;
+    }
+  }
+  if (hIdx < 0) return [];
+
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const col = (...aliases: string[]) => {
+    for (const a of aliases) {
+      const idx = headers.indexOf(a.toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    for (const a of aliases) {
+      const idx = headers.findIndex((h) => h.includes(a.toLowerCase()));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const cTitle   = col('job title', 'title');
+  const cId      = col('associate id', 'id');
+  const cName    = col('associate', 'associate name', 'employee name', 'name');
+  const cDateIn  = col('date in', 'visit date', 'date');
+  const cTimeIn  = col('time in');
+  const cTimeOut = col('time out');
+  const cHours   = col('time hours', 'hours');
+
+  const out: CiActivityRow[] = [];
+  for (let i = hIdx + 1; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.every((v) => v == null || v === '')) continue;
+
+    const name = cName >= 0 ? toStr(row[cName]) : '';
+    const id   = cId   >= 0 ? toStr(row[cId])   : '';
+    if (!name && !id) continue;
+
+    out.push({
+      rowNum: i + 1,
+      employeeName: name,
+      associateId:  id,
+      jobTitle:     cTitle  >= 0 ? toStr(row[cTitle])  : '',
+      visitDate:    cDateIn >= 0 ? toDate(row[cDateIn]) : null,
+      timeIn:       cTimeIn  >= 0 ? toStr(row[cTimeIn])  : '',
+      timeOut:      cTimeOut >= 0 ? toStr(row[cTimeOut]) : '',
+      timeHours:    cHours  >= 0 ? toNum(row[cHours])  : 0,
+      isOt:         false,
+    });
+  }
+  return out;
+}
+
+/**
+ * Parse the BUP Roster XLSX into CiRosterRow[].
+ */
+export async function parseCiRosterFile(file: File): Promise<CiRosterRow[]> {
+  const buf = await readBuf(file);
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  } catch {
+    return [];
+  }
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return [];
+
+  const aoa = readAoA(ws);
+  if (aoa.length < 2) return [];
+
+  // Find header row by scanning first 10 rows for "Associate ID"
+  let hIdx = -1;
+  for (let i = 0; i < Math.min(10, aoa.length); i++) {
+    const row = aoa[i] || [];
+    if (row.some((c) => toStr(c).toLowerCase() === 'associate id')) {
+      hIdx = i; break;
+    }
+  }
+  if (hIdx < 0) return [];
+
+  const headers = (aoa[hIdx] as unknown[]).map((c) => toStr(c).toLowerCase());
+  const col = (...aliases: string[]) => {
+    for (const a of aliases) {
+      const idx = headers.indexOf(a.toLowerCase());
+      if (idx >= 0) return idx;
+    }
+    for (const a of aliases) {
+      const idx = headers.findIndex((h) => h.includes(a.toLowerCase()));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
+
+  const cId      = col('associate id');
+  const cName    = col('employee name', 'associate name', 'name');
+  const cNotes   = col('notes');
+  const cType    = col('type');
+  const cMgr     = col('manager name', 'manager');
+  const cState   = col('store state', 'state');
+  const cRate    = col('hourly pay rate', 'pay rate', 'rate');
+  const cStart   = col('start date');
+  const cType3   = col('type 3');
+
+  const out: CiRosterRow[] = [];
+  for (let i = hIdx + 1; i < aoa.length; i++) {
+    const row = aoa[i] || [];
+    if (row.every((v) => v == null || v === '')) continue;
+
+    const id   = cId   >= 0 ? toStr(row[cId])   : '';
+    const name = cName >= 0 ? toStr(row[cName]) : '';
+    if (!id && !name) continue;
+
+    out.push({
+      rowNum:       i + 1,
+      associateId:  id,
+      employeeName: name,
+      notes:        cNotes >= 0 ? toStr(row[cNotes]) : '',
+      type:         cType  >= 0 ? toStr(row[cType])  : '',
+      managerName:  cMgr   >= 0 ? toStr(row[cMgr])   : '',
+      storeState:   cState >= 0 ? toStr(row[cState])  : '',
+      hourlyPayRate: cRate  >= 0 ? toNum(row[cRate])   : 0,
+      startDate:    cStart >= 0 ? toDate(row[cStart])  : null,
+      type3:        cType3 >= 0 ? toStr(row[cType3])   : '',
+    });
+  }
+  return out;
+}
+
+/**
+ * Main entry point for CI invoice parsing.
+ */
+export async function parseCiInvoice(
+  invoiceFile: File,
+  activityFiles: File[],
+  rosterFile: File | null,
+  timeOffFile: File | null,
+): Promise<CiParsedData> {
+  const buf = await readBuf(invoiceFile);
+
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: true, cellDates: false });
+  } catch {
+    wb = XLSX.read(buf, { type: 'array', cellFormula: false, cellDates: false });
+  }
+
+  // 1. Cover tab metadata
+  const coverMeta = parseCiCoverTab(wb);
+
+  // 2. Detail tabs — explicit "Detail" tab first, then per-role probing
+  const detailRows: CiDetailRow[] = [];
+  const crossTabNotes: string[] = [];
+
+  const coverTabName = wb.SheetNames[0] ?? '';
+  const explicitDetail = findSheet(wb, ['Detail', 'SES Detail', 'Labor Detail']);
+  if (explicitDetail) {
+    const rows = parseCiDetailTab(explicitDetail.ws, explicitDetail.name);
+    detailRows.push(...rows);
+  }
+
+  // Per-role tab probing: try remaining non-excluded tabs
+  for (const tabName of wb.SheetNames) {
+    const lower = tabName.trim().toLowerCase();
+    // Skip cover tab (index 0), explicit detail tab if already handled, and excluded tabs
+    if (lower === coverTabName.trim().toLowerCase()) continue;
+    if (explicitDetail && lower === explicitDetail.name.trim().toLowerCase()) continue;
+    if (CI_EXCLUDE_TABS.some((ex) => lower === ex || lower.startsWith(ex))) continue;
+
+    const ws = wb.Sheets[tabName];
+    if (!ws) continue;
+    const rows = parseCiDetailTab(ws, tabName);
+    if (rows.length > 0) {
+      detailRows.push(...rows);
+    }
+  }
+
+  // 3. Cloud Services tab — sum all amounts
+  const cloudSheet = findSheet(wb, ['Cloud Services', 'Cloud']);
+  const cloudRows = cloudSheet ? parseCloudSheet(cloudSheet.ws) : [];
+  const cloudTotal = Math.round(cloudRows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+
+  // 4. New Hire Fees tab — sum all amounts
+  const newHireSheet = findSheet(wb, ['New Hire Fees', 'New Hire Fee']);
+  const newHireRows = newHireSheet ? parseCloudSheet(newHireSheet.ws) : [];
+  const newHireFeeTotal = Math.round(newHireRows.reduce((s, r) => s + r.amount, 0) * 100) / 100;
+
+  // 5. Tie-Out / Invoice Summary — find "Total Due" label
+  let tieOutInvoiceTotal: number | null = null;
+  const tieOutSheet = findSheet(wb, ['Tie-Out', 'Invoice Summary', 'Invoice Schedule']);
+  if (tieOutSheet) {
+    const aoa = readAoA(tieOutSheet.ws);
+    for (const rawRow of aoa) {
+      if (!rawRow) continue;
+      for (let j = 0; j < rawRow.length; j++) {
+        const cellStr = toStr(rawRow[j]).toLowerCase();
+        if (cellStr.includes('total due') || cellStr.includes('amount due') ||
+            (cellStr.includes('total') && cellStr.includes('invoice')) ||
+            cellStr.trim() === 'invoice') {
+          // Look for numeric value in remaining cells of this row
+          for (let k = j + 1; k < rawRow.length; k++) {
+            const n = toNum(rawRow[k]);
+            if (n !== 0 && Math.abs(n) > 100) {
+              tieOutInvoiceTotal = Math.round(n * 100) / 100;
+              break;
+            }
+          }
+          if (tieOutInvoiceTotal != null) break;
+        }
+      }
+      if (tieOutInvoiceTotal != null) break;
+    }
+  }
+  // Fall back to coverMeta.totalDue if Tie-Out tab not found / no match
+  if (tieOutInvoiceTotal == null && coverMeta.totalDue != null) {
+    tieOutInvoiceTotal = coverMeta.totalDue;
+  }
+
+  // 6. weeksCovered from detail rows
+  const weekSet = new Set<number>();
+  for (const r of detailRows) {
+    if (r.week != null && r.week > 0) weekSet.add(r.week);
+  }
+  const weeksCovered = Array.from(weekSet).sort((a, b) => a - b);
+
+  // 7. Activity files
+  const activityRows: CiActivityRow[] = [];
+  for (const f of activityFiles) {
+    const rows = await parseCiActivityFile(f);
+    activityRows.push(...rows);
+  }
+
+  // 8. Roster file
+  const ciRosterRows: CiRosterRow[] = rosterFile
+    ? await parseCiRosterFile(rosterFile)
+    : [];
+
+  // 9. Time off file
+  const timeOffRows: TimeOffRow[] = timeOffFile
+    ? await parseTimeOffFile(timeOffFile)
+    : [];
+
+  // Cross-tab notes
+  if (detailRows.length === 0) crossTabNotes.push('No CI detail rows found in any tab.');
+  if (!cloudSheet) crossTabNotes.push('Cloud Services tab not found — cloud total will be 0.');
+  if (!newHireSheet) crossTabNotes.push('New Hire Fees tab not found — new hire fee total will be 0.');
+  if (!tieOutSheet) crossTabNotes.push('Tie-Out / Invoice Summary tab not found — invoice total taken from cover tab.');
+  if (activityFiles.length === 0) crossTabNotes.push('No BUP Activity files uploaded — activity checks will be skipped.');
+  if (!rosterFile) crossTabNotes.push('No BUP Roster file uploaded — roster checks will be skipped.');
+  crossTabNotes.push(
+    `Detail rows: ${detailRows.length}. Activity rows: ${activityRows.length}. Roster rows: ${ciRosterRows.length}.`,
+  );
+
+  return {
+    fileName: invoiceFile.name,
+    coverMeta,
+    detailRows,
+    cloudTotal,
+    newHireFeeTotal,
+    tieOutInvoiceTotal,
+    weeksCovered,
+    tabNames: wb.SheetNames,
+    crossTabNotes,
+    activityRows,
+    ciRosterRows,
+    timeOffRows,
   };
 }

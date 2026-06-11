@@ -1,7 +1,7 @@
 import { FileSpreadsheet, Settings } from 'lucide-react';
 
 interface HeaderProps {
-  program?: 'fsm' | 'ses';
+  program?: 'fsm' | 'ses' | 'ci';
   fileName?: string;
   overallStatus?: 'pass' | 'fail' | 'warning' | 'pending' | null;
   rulesOpen?: boolean;
@@ -25,7 +25,7 @@ export function Header({ program = 'fsm', fileName, overallStatus, rulesOpen, on
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-tight text-mc-text">
-              {program === 'ses' ? 'SES Invoice Audit' : 'FSM Invoice Audit'}
+              {program === 'ses' ? 'SES Invoice Audit' : program === 'ci' ? 'CI Invoice Audit' : 'FSM Invoice Audit'}
             </h1>
             <p className="text-xs text-mc-dim">Tier 1 Engine + Bragi Analysis</p>
           </div>
