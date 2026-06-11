@@ -226,6 +226,12 @@ function parseCloudSheet(ws: XLSX.WorkSheet): CloudRow[] {
   };
 
   const cLicenseType = col('type of license');
+  // "Quantity" (FSM) vs "Qty" / "# Licenses" / "License Count" (SES and other formats)
+  const cQty = (() => {
+    const exact = col('quantity', 'qty');
+    if (exact >= 0) return exact;
+    return headers.findIndex((h) => h.includes('qty') || h.includes('# license') || h.includes('license count'));
+  })();
 
   const out: CloudRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
@@ -233,7 +239,7 @@ function parseCloudSheet(ws: XLSX.WorkSheet): CloudRow[] {
     if (row.every((v) => v == null || v === '')) continue;
     const name = toStr(row[col('associate name')]);
     if (!name) continue;
-    const qtyRaw = row[col('quantity')];
+    const qtyRaw = cQty >= 0 ? row[cQty] : null;
     out.push({
       rowNum: i + 1,
       associateName: name,
