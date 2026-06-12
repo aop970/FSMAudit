@@ -1,7 +1,7 @@
 // Check 6 — Cloud Services Validation
-// Cloud Services rows must be billed at 100% allocation.
-// Cloud Services Manager rows must use the allocation from the Management Detail Hours tab
-// for that associate (averaged across all weeks in the period).
+// Cloud Services rows must be billed at 100% allocation, UNLESS the associate appears in
+// the Management Detail Hours tab — in that case the billed allocation must match the
+// manager's % allocation from that tab (averaged across all weeks in the period).
 
 import type { CheckResult, CloudRow, MgmtRow } from '../types';
 import { fmtMoney } from '../../lib/num';
@@ -54,10 +54,19 @@ export function check06Cloud(cloudRows: CloudRow[], mgmtRows: MgmtRow[]): CheckR
 
   for (const r of cloudRows) {
     const qty = r.quantity ?? 0;
-    const isManager = r.licenseType.toLowerCase().includes('manager');
+    const id = r.associateId.toUpperCase();
+
+    // A row is treated as a manager if:
+    //   (a) the associate appears in the Management Detail Hours tab, OR
+    //   (b) the "Type of License" column contains "manager"
+    // Using mgmtAllocMap membership as the primary signal means managers are
+    // correctly identified even when the "Type of License" column is absent or
+    // uses a label that doesn't contain the word "manager".
+    const mgmtAlloc = mgmtAllocMap.get(id);
+    const isManager = mgmtAlloc !== undefined || r.licenseType.toLowerCase().includes('manager');
 
     if (!isManager) {
-      // Cloud Services rows must be billed at 100% allocation
+      // Non-manager Cloud Services rows must be billed at 100% allocation
       if (Math.abs(r.allocation - 1.0) > 0.001) {
         const expectedAmt = qty * r.rate * 1.0;
         failures.push({
@@ -74,9 +83,9 @@ export function check06Cloud(cloudRows: CloudRow[], mgmtRows: MgmtRow[]): CheckR
         });
       }
     } else {
-      // Cloud Services Manager rows must match the management table allocation
-      const mgmtAlloc = mgmtAllocMap.get(r.associateId.toUpperCase());
+      // Manager rows: allocation must match the Management Detail Hours tab
       if (mgmtAlloc === undefined) {
+        // licenseType says "manager" but the associate isn't in the mgmt tab
         failures.push({
           row: r.rowNum,
           name: r.associateName,
@@ -107,21 +116,20 @@ export function check06Cloud(cloudRows: CloudRow[], mgmtRows: MgmtRow[]): CheckR
   }
 
   // Every manager in the management table must have a row on the Cloud Services tab.
-  // This cross-check only runs when the cloud tab has at least one manager-typed row
-  // (i.e. "Type of License" contains "manager"). Formats without that column (e.g. SES)
-  // have no manager rows, so the cross-check is skipped to avoid false positives.
+  // The management table is the authoritative source of who counts as a manager —
+  // skip this cross-check only when the mgmt tab is completely empty (SES / no-mgmt formats).
   const cloudMgrIds = new Set(
     cloudRows
-      .filter((r) => r.licenseType.toLowerCase().includes('manager'))
+      .filter((r) => mgmtAllocMap.has(r.associateId.toUpperCase()) || r.licenseType.toLowerCase().includes('manager'))
       .map((r) => r.associateId.toUpperCase()),
   );
-  if (cloudMgrIds.size > 0) {
-    for (const [id, alloc] of mgmtAllocMap) {
-      if (!cloudMgrIds.has(id)) {
-        const mgmtRow = mgmtRows.find((m) => m.associateId.toUpperCase() === id);
+  if (mgmtAllocMap.size > 0) {
+    for (const [mgmtId, alloc] of mgmtAllocMap) {
+      if (!cloudMgrIds.has(mgmtId)) {
+        const mgmtRow = mgmtRows.find((m) => m.associateId.toUpperCase() === mgmtId);
         failures.push({
-          name: mgmtRow?.name ?? id,
-          id,
+          name: mgmtRow?.name ?? mgmtId,
+          id: mgmtId,
           licenseType: 'Cloud Services Manager',
           expectedAlloc: (alloc * 100).toFixed(2) + '%',
           issue: 'Manager present in Management Detail Hours but missing from Cloud Services tab',
@@ -130,7 +138,7 @@ export function check06Cloud(cloudRows: CloudRow[], mgmtRows: MgmtRow[]): CheckR
     }
   }
 
-  const managerCount  = cloudRows.filter((r) => r.licenseType.toLowerCase().includes('manager')).length;
+  const managerCount  = cloudRows.filter((r) => mgmtAllocMap.has(r.associateId.toUpperCase()) || r.licenseType.toLowerCase().includes('manager')).length;
   const standardCount = cloudRows.length - managerCount;
   const pass = failures.length === 0;
 
