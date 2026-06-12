@@ -14,8 +14,8 @@
 //   "Overtime"                — generic label (non-CA/PR weekly OT)
 //   "CA Daily Overtime"       — CA daily OT row (must have single date)
 //   "CA Weekly Overtime"      — CA weekly OT row (date range OK)
-//   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT"
-//   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT"
+//   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT" / "PR Daily Overtime" / "PR Daily OT"
+//   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT" / "PR Weekly Overtime" / "PR Weekly OT"
 //
 // Non-CA/PR employees — Weekly OT (40h threshold, Mon-Sun weeks):
 //   Sum eligible hours per employee per work week. If > 40, expected OT = eligible - 40.
@@ -26,8 +26,8 @@
 //   Correct OT = max(dailyOT, weeklyOT)
 //
 // PR OT row labels:
-//   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT"  — must have single date (HARD STOP if null)
-//   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT" — date range OK
+//   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT" / "PR Daily Overtime" / "PR Daily OT"  — must have single date (HARD STOP if null)
+//   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT" / "PR Weekly Overtime" / "PR Weekly OT" — date range OK
 //   generic "Overtime" on PR employee → same "generic OT label" warning as CA
 //
 // Tolerance: +/-0.05 hours before flagging a fail.
@@ -70,11 +70,11 @@ function isCaWeeklyOt(t: string): boolean {
 }
 
 function isPrDailyOt(t: string): boolean {
-  return t === 'puerto rico daily overtime' || t === 'puerto rico daily ot';
+  return t === 'puerto rico daily overtime' || t === 'puerto rico daily ot' || t === 'pr daily overtime' || t === 'pr daily ot';
 }
 
 function isPrWeeklyOt(t: string): boolean {
-  return t === 'puerto rico weekly overtime' || t === 'puerto rico weekly ot';
+  return t === 'puerto rico weekly overtime' || t === 'puerto rico weekly ot' || t === 'pr weekly overtime' || t === 'pr weekly ot';
 }
 
 /** True if this is any recognized OT-row label (engine level — not in eligible/excluded config). */
