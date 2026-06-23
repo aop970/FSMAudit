@@ -98,16 +98,10 @@ function toDateKey(d: Date): string {
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
-// Formats source rows as "TabName: rows 5, 12, 18; TabName2: rows 3, 9"
+// Formats location as unique tab/sheet name(s) — e.g. "FSM I" or "FSM I; FSM II"
 function formatLocation(sourceRows: { sheet: string; rowNum: number }[]): string {
-  const grouped = new Map<string, Set<number>>();
-  for (const sr of sourceRows) {
-    if (!grouped.has(sr.sheet)) grouped.set(sr.sheet, new Set());
-    grouped.get(sr.sheet)!.add(sr.rowNum);
-  }
-  return Array.from(grouped.entries())
-    .map(([sheet, rows]) => `${sheet}: rows ${[...rows].sort((a, b) => a - b).join(', ')}`)
-    .join('; ') || '(no rows tracked)';
+  const sheets = [...new Set(sourceRows.map((sr) => sr.sheet))];
+  return sheets.join('; ') || '(no rows tracked)';
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
