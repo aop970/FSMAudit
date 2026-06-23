@@ -42,7 +42,14 @@ export interface AuditRules {
     supported: string[];  // default: Work, Travel, Admin, Training, Meeting, Break
     exceptions: string[]; // default: Time Off, Paid Holiday, Termed PTO, Overtime
   };
-  otThreshold: number;         // default 3.99 (hours > this value)
+  otThreshold: number;         // default 3.99 (hours > this value) — legacy; kept for other checks
+  /** Check 7 tiered OT approval thresholds.
+   *  otApprovalDlMin: hours > this value (exclusive) triggers DL Approval tier (Orange).
+   *  otApprovalExecMin: hours >= this value triggers Exec Approval tier (Red).
+   *  Default: 2.0 / 4.0 per Allan's spec 2026-06-23.
+   */
+  otApprovalDlMin: number;     // default 2.0 (>2.00 hrs needs DL approval)
+  otApprovalExecMin: number;   // default 4.0 (>=4.00 hrs needs Exec approval)
   tolerances: {
     dollar: number;  // default 0.01
     hours: number;   // default 0.01
@@ -81,6 +88,8 @@ export const DEFAULT_RULES: AuditRules = {
     exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Overtime'],
   },
   otThreshold: 3.99,
+  otApprovalDlMin: 2.0,
+  otApprovalExecMin: 4.0,
   tolerances: {
     dollar: 0.01,
     hours: 0.01,
@@ -127,6 +136,8 @@ export const DEFAULT_SES_RULES: AuditRules = {
     exceptions: ['Time Off', 'Paid Holiday', 'Termed PTO', 'Overtime'],
   },
   otThreshold: 3.99,
+  otApprovalDlMin: 2.0,
+  otApprovalExecMin: 4.0,
   tolerances: { dollar: 0.01, hours: 0.01 },
   invoiceTabs: {
     toLoad: ['Detail', 'Management Detail Hours', 'Cloud Services', 'Invoice Summary'],
@@ -159,6 +170,8 @@ export const DEFAULT_CI_RULES: AuditRules = {
     exceptions: ['Time Off', 'Holiday', 'Overtime'],
   },
   otThreshold: 3.99,
+  otApprovalDlMin: 2.0,
+  otApprovalExecMin: 4.0,
   tolerances: { dollar: 0.01, hours: 0.01 },
   invoiceTabs: {
     toLoad: ['Detail', 'Cloud Services', 'New Hire Fees', 'Tie-Out', 'Invoice Schedule'],
@@ -225,6 +238,8 @@ function deepMerge(defaults: AuditRules, stored: Partial<AuditRules>): AuditRule
       exceptions: stored.punchCategories?.exceptions ?? defaults.punchCategories.exceptions,
     },
     otThreshold: stored.otThreshold ?? defaults.otThreshold,
+    otApprovalDlMin: stored.otApprovalDlMin ?? defaults.otApprovalDlMin,
+    otApprovalExecMin: stored.otApprovalExecMin ?? defaults.otApprovalExecMin,
     tolerances: { ...defaults.tolerances, ...(stored.tolerances ?? {}) },
     invoiceTabs: {
       toLoad: stored.invoiceTabs?.toLoad ?? defaults.invoiceTabs.toLoad,

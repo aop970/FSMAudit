@@ -90,7 +90,13 @@ export interface SesPunchRow {
 
 export interface OtApprovalRow {
   rowNum: number;
+  /** Column B — the employee name match key */
   associateName: string;
+  /** Column C — "Approved" | "Pending" | "Denied" | "" */
+  status: string;
+  /** Column J — "Overtime" | "CA Daily" | etc. */
+  approvalType: string;
+  /** Legacy field — kept for backward compat; no longer populated */
   seaDlStatus: string;
 }
 

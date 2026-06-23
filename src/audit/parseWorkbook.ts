@@ -279,22 +279,51 @@ function parseRosterSheet(ws: XLSX.WorkSheet): RosterEntry[] {
 }
 
 // ── OT approval ───────────────────────────────────────────────────────────────
+// Standardized OT Approval tab column layout (confirmed 2026-06-23):
+//   A: Form name  B: Associate  C: Status  D: Comments  E: Start Date/Time
+//   F: End Date/Time  G: Samsung Leadership Name  H: Samsung Leadership Email
+//   I: Samsung Leadership Comment  J: Approval Type
+// Columns are detected by header name first (case-insensitive, trimmed),
+// then fall back to fixed indices B=1, C=2, J=9 if headers are absent or differ.
 
 function parseOtApprovalSheet(ws: XLSX.WorkSheet): OtApprovalRow[] {
   const aoa = readAoA(ws);
   if (aoa.length < 2) return [];
-  const headers = (aoa[0] as unknown[]).map((c) => toStr(c).toLowerCase());
-  const cName = headers.findIndex(
-    (h) => h.includes('employee name') || h.includes('associate name'),
-  );
-  const cSea  = headers.findIndex((h) => h.includes('sea dl'));
-  if (cName < 0) return [];
+
+  // Row 0 is the header row.
+  const rawHeaders = (aoa[0] as unknown[]).map((c) => toStr(c).trim().toLowerCase());
+
+  // Column B — "Associate": exact match first, then any header containing "associate" (not "id")
+  let cName = rawHeaders.findIndex((h) => h === 'associate');
+  if (cName < 0) cName = rawHeaders.findIndex((h) => h.includes('associate') && !h.includes('id'));
+  // Legacy fallback: "employee name" / "associate name"
+  if (cName < 0) cName = rawHeaders.findIndex((h) => h.includes('employee name') || h.includes('associate name'));
+  // Hard fallback to column index 1 (B)
+  if (cName < 0) cName = 1;
+
+  // Column C — "Status"
+  let cStatus = rawHeaders.findIndex((h) => h === 'status');
+  if (cStatus < 0) cStatus = 2;
+
+  // Column J — "Approval Type"
+  let cApprovalType = rawHeaders.findIndex((h) => h === 'approval type' || h.includes('approval type'));
+  if (cApprovalType < 0) cApprovalType = 9;
+
+  // Legacy SEA DL column — kept for backward compat; no longer primary approval logic
+  const cSea = rawHeaders.findIndex((h) => h.includes('sea dl'));
+
   const out: OtApprovalRow[] = [];
   for (let i = 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
-    const name = toStr(row[cName]);
+    const name = toStr(row[cName]).trim();
     if (!name) continue;
-    out.push({ rowNum: i + 1, associateName: name, seaDlStatus: cSea >= 0 ? toStr(row[cSea]) : '' });
+    out.push({
+      rowNum: i + 1,
+      associateName: name,
+      status: toStr(row[cStatus]).trim(),
+      approvalType: toStr(row[cApprovalType]).trim(),
+      seaDlStatus: cSea >= 0 ? toStr(row[cSea]).trim() : '',
+    });
   }
   return out;
 }
