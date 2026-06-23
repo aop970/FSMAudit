@@ -402,8 +402,13 @@ async function parsePunchCSV(file: File): Promise<PunchRow[]> {
         const rows: PunchRow[] = [];
         for (let i = 0; i < results.data.length; i++) {
           const r = results.data[i] as Record<string, string>;
-          // Column names referenced by name, never by position
-          const name = toStr(r['Associate Name'] ?? r['Employee Name'] ?? r['associate name'] ?? r['employee name']);
+          // Column names referenced by name, never by position.
+          // FSM punch exports use the column header "Associate" (not "Associate Name").
+          const name = toStr(
+            r['Associate Name'] ?? r['Employee Name'] ??
+            r['associate name'] ?? r['employee name'] ??
+            r['Associate'] ?? r['associate'] ?? ''
+          );
           if (!name) continue;
 
           // Time in/out may be decimal fraction of day (Excel) or HH:MM string
@@ -424,7 +429,7 @@ async function parsePunchCSV(file: File): Promise<PunchRow[]> {
             comments: toStr(r['Comments'] ?? r['comments'] ?? r['Time Type'] ?? r['time type'] ?? ''),
             visitDate: visitDateRaw ? parseDate(visitDateRaw) : null,
             week: (() => {
-              const w = r['Week'] ?? r['week'] ?? '';
+              const w = r['Week'] ?? r['week'] ?? r['Invoice Week #'] ?? r['invoice week #'] ?? '';
               return w ? (toNum(w) || null) : null;
             })(),
           });

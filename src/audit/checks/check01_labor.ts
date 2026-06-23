@@ -6,6 +6,13 @@
 //   • "CA Daily Overtime" / "CA Weekly Overtime" rows (always — billed at OT rate)
 // Tolerance ≤ rules.tolerances.dollar per row
 // If hourlyRates.fsmI/fsmII/Merit are set (> 0), validates base pay rate for non-OT rows.
+//
+// Excluded from Check 1 (validated by dedicated checks instead):
+//   • "Paid Holiday" rows — validated by Check 18 (Holiday Pay Validation)
+//   • "Time Off" rows    — validated by Check 12 (Time Off Reconciliation)
+//   • "Termed PTO" rows  — validated by Check 14 (Termed PTO Validation)
+// These row types do not follow the standard base×markup×hours billing formula;
+// running Check 1 on them produces false positives when holiday/PTO billing is flat or base-only.
 
 import type { CheckResult, LaborRow } from '../types';
 import { fmtMoney } from '../../lib/num';
@@ -53,8 +60,15 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
 
   for (const r of all) {
     if (r.timeHours === 0 && r.basePayRate === 0) continue;
-    const type = r.associateType.toUpperCase().trim();
     const commentLower = r.comments.trim().toLowerCase();
+    // Skip row types that have their own dedicated checks and do not follow
+    // the standard base×markup×hours formula (Check 12, 14, 18 own these).
+    if (
+      commentLower === 'paid holiday' ||
+      commentLower === 'time off' ||
+      commentLower === 'termed pto'
+    ) continue;
+    const type = r.associateType.toUpperCase().trim();
     const isOverTime    = /overtime/i.test(r.comments);
     const isCADailyOT  = commentLower === 'ca daily overtime' || commentLower === 'ca daily ot';
     const isCAWeeklyOT = commentLower === 'ca weekly overtime' || commentLower === 'ca weekly ot';
