@@ -149,23 +149,41 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
-                    {Object.keys(result.flaggedRows[0]).map((k) => (
-                      <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
-                        {k}
-                      </th>
-                    ))}
+                    {Object.keys(result.flaggedRows[0])
+                      .filter((k) => !(result.checkId === 7 && k === 'severity'))
+                      .map((k) => (
+                        <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                          {k}
+                        </th>
+                      ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {result.flaggedRows.slice(0, 200).map((row, i) => (
-                    <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={{ borderColor: 'var(--mc-card-border)' }}>
-                      {Object.values(row).map((v, j) => (
-                        <td key={j} className="px-3 py-1.5 font-mono text-mc-text">
-                          {String(v ?? '—')}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
+                  {result.flaggedRows.slice(0, 200).map((row, i) => {
+                    // Check 7: apply row tint based on severity field
+                    const isCheck7 = result.checkId === 7;
+                    const severity = isCheck7 ? (row['severity'] as string | undefined) : undefined;
+                    const rowStyle: React.CSSProperties = {
+                      borderColor: 'var(--mc-card-border)',
+                      ...(severity === 'red'
+                        ? { backgroundColor: 'rgba(239, 68, 68, 0.12)', borderLeft: '3px solid rgba(239, 68, 68, 0.7)' }
+                        : severity === 'orange'
+                        ? { backgroundColor: 'rgba(251, 146, 60, 0.12)', borderLeft: '3px solid rgba(251, 146, 60, 0.7)' }
+                        : {}),
+                    };
+                    const displayEntries = Object.entries(row).filter(
+                      ([k]) => !(isCheck7 && k === 'severity'),
+                    );
+                    return (
+                      <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={rowStyle}>
+                        {displayEntries.map(([k, v]) => (
+                          <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
+                            {String(v ?? '—')}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {result.flaggedRows.length > 200 && (
