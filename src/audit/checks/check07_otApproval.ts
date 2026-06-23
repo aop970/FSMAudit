@@ -1,9 +1,15 @@
-// Check 7 — Tiered OT Approval (reworked 2026-06-23 per Allan's spec)
+// Check 7 — Tiered OT Approval (per-entry, 2026-06-23 per Allan's spec)
 //
-// Business rule: Approval is only required when an employee's total OT hours
-// (per OT TYPE, summed across the invoice week) exceed 2.00 hrs.
+// Business rule: Each individual OT row is evaluated on its OWN hours.
+// Do NOT sum hours across entries. A row is subject to the approval check when:
+//   1. Its Comments column matches one of the recognized OT types (below), AND
+//   2. That single row's hours exceed the DL threshold (> 2.00 hrs).
 //
-// OT hours are bucketed by the canonical OT type label on each LaborRow:
+// Multiple entries for the same employee can each produce their own finding.
+// Two entries of 1.3 + 1.35 hrs = neither flags, even though 2.65 would flag
+// if it were a single entry. (This is the "Antonio Grouzis" case.)
+//
+// OT type recognition (Comments column → canonical label):
 //   "Overtime"               — generic (non-CA/PR weekly OT)
 //   "CA Daily Overtime"      — CA daily OT (also matches "CA Daily OT")
 //   "CA Weekly Overtime"     — CA weekly OT (also matches "CA Weekly OT")
@@ -22,7 +28,7 @@
 // A single approved Overtime row satisfies BOTH tiers (DL and Exec).
 // There is no separate DL vs Exec signal in the tab — tier is severity/color only.
 //
-// Blanket exceptions (from rules.otExceptions) are still honored.
+// Blanket exceptions (from rules.otExceptions) are still honored per entry.
 //
 // Matching uses column B "Associate" from the OT Approval tab.
 // Names are compared case-insensitive with leading/trailing whitespace stripped.
@@ -66,78 +72,54 @@ export function check07OtApproval(
   const OT_EXEC_MIN      = rules.otApprovalExecMin ?? 4.0;
   const otExceptions     = rules.otExceptions ?? [];
 
-  // ── Step 1: Aggregate OT hours per employee per OT type ─────────────────────
-  // Key: "employeeName_lower|canonicalOtType"
-  // Value: { name, otType, totalHrs, sourceRows, weeks }
-
-  type OtAccum = {
-    employeeName: string;
-    otType: string;
-    totalHrs: number;
-    sourceRows: { sheet: string; rowNum: number; week: number | null }[];
-  };
-
-  const otMap = new Map<string, OtAccum>();
-
-  for (const r of [...fsmI, ...fsmII]) {
-    const bucket = canonicalOtType(toStr(r.comments));
-    if (!bucket) continue; // not an OT row
-
-    const key = `${toStr(r.employeeName).toLowerCase().trim()}|${bucket}`;
-    if (!otMap.has(key)) {
-      otMap.set(key, {
-        employeeName: r.employeeName,
-        otType: bucket,
-        totalHrs: 0,
-        sourceRows: [],
-      });
-    }
-    const entry = otMap.get(key)!;
-    entry.totalHrs += r.timeHours;
-    entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum, week: r.week });
-  }
-
-  // ── Step 2: Build approved-name set from OT Approval tab ────────────────────
+  // ── Step 1: Build approved-name set from OT Approval tab ────────────────────
   // An employee is approved if ANY row has Status="Approved" AND ApprovalType="Overtime"
   // (case-insensitive, trimmed). A single such row covers both DL and Exec tiers.
 
   const approvedNames = new Set<string>();
   for (const r of otApprovalRows) {
-    const statusOk       = toStr(r.status).trim().toLowerCase() === 'approved';
-    const typeOk         = toStr(r.approvalType).trim().toLowerCase() === 'overtime';
+    const statusOk = toStr(r.status).trim().toLowerCase() === 'approved';
+    const typeOk   = toStr(r.approvalType).trim().toLowerCase() === 'overtime';
     if (statusOk && typeOk) {
       approvedNames.add(toStr(r.associateName).trim().toLowerCase());
     }
   }
 
-  // ── Step 3: Evaluate each employee+OT-type accumulation ─────────────────────
+  // ── Step 2: Evaluate each OT-labeled source row individually ────────────────
+  // NO aggregation or summing. Each row stands on its own hours.
 
   const flagged: Record<string, unknown>[] = [];
   const blanketApproved: Record<string, unknown>[] = [];
-  const belowThreshold: number[] = []; // count only
+  let belowThresholdCount = 0;
+  let approvedCount = 0;
+  let otRowCount = 0;
 
-  for (const entry of otMap.values()) {
-    const hrs = entry.totalHrs;
-    const sheets = [...new Set(entry.sourceRows.map((sr) => sr.sheet))].join('; ');
+  for (const r of [...fsmI, ...fsmII]) {
+    const bucket = canonicalOtType(toStr(r.comments));
+    if (!bucket) continue; // not an OT row — skip
 
-    // ≤ OT_APPROVAL_MIN: no approval needed
+    otRowCount++;
+    const hrs = r.timeHours;
+    const sheet = r.sheet ?? 'Unknown';
+
+    // ≤ OT_APPROVAL_MIN: no approval needed for this entry
     if (hrs <= OT_APPROVAL_MIN) {
-      belowThreshold.push(hrs);
+      belowThresholdCount++;
       continue;
     }
 
-    // Check blanket exceptions (per week, hours cap)
-    const weeks = [...new Set(entry.sourceRows.map((sr) => sr.week).filter((w) => w != null))] as number[];
-    const matchingException = weeks.length > 0
-      ? otExceptions.find((ex) => weeks.includes(ex.week) && hrs <= ex.maxHours)
+    // Check blanket exceptions (per-week, per-hours cap)
+    const week = r.week ?? null;
+    const matchingException = week != null
+      ? otExceptions.find((ex) => ex.week === week && hrs <= ex.maxHours)
       : undefined;
 
     if (matchingException) {
       blanketApproved.push({
         section: 'blanketApproved',
-        location: sheets,
-        name: entry.employeeName,
-        otType: entry.otType,
+        location: sheet,
+        name: r.employeeName,
+        otType: bucket,
         hours: hrs.toFixed(2),
         week: matchingException.week,
         issue: `Blanket-approved: week ${matchingException.week}, ≤ ${matchingException.maxHours}hrs — ${matchingException.note || '(blanket approval)'}`,
@@ -151,34 +133,29 @@ export function check07OtApproval(
     const severity = isExecTier ? 'red' : 'orange';
 
     // Check approval
-    const nameKey = toStr(entry.employeeName).trim().toLowerCase();
+    const nameKey = toStr(r.employeeName).trim().toLowerCase();
     const isApproved = approvedNames.has(nameKey);
 
-    if (!isApproved) {
+    if (isApproved) {
+      approvedCount++;
+      // Approved: pass silently (no flagged row)
+    } else {
       flagged.push({
-        location: 'OT Approval',
-        name: entry.employeeName,
-        otType: entry.otType,
+        location: sheet,
+        name: r.employeeName,
+        otType: bucket,
         hours: hrs.toFixed(2),
         tier,
         severity,
         approved: false,
-        issue: `${entry.otType} ${hrs.toFixed(2)}hrs — ${tier} — no matching Approved/Overtime row found in OT Approval tab`,
-        sourceSheets: sheets,
+        issue: `${bucket} ${hrs.toFixed(2)}hrs — ${tier} — no matching Approved/Overtime row found in OT Approval tab`,
       });
     }
-    // If approved: pass silently (no flagged row)
   }
 
-  // ── Step 4: Build result ─────────────────────────────────────────────────────
+  // ── Step 3: Build result ─────────────────────────────────────────────────────
 
-  const totalOtBuckets = otMap.size;
-  const belowCount = belowThreshold.length;
-  const blanketCount = blanketApproved.length;
-  const passCount = totalOtBuckets - belowCount - blanketCount - flagged.length;
-
-  const statParts: string[] = [];
-  if (totalOtBuckets === 0 && otApprovalRows.length === 0) {
+  if (otRowCount === 0 && otApprovalRows.length === 0) {
     return {
       checkId: 7,
       checkName: 'OT Approval (Tiered)',
@@ -189,10 +166,11 @@ export function check07OtApproval(
     };
   }
 
-  statParts.push(`${totalOtBuckets} employee/OT-type bucket${totalOtBuckets === 1 ? '' : 's'}`);
-  if (belowCount > 0) statParts.push(`${belowCount} at/below ${OT_APPROVAL_MIN}hr threshold (exempt)`);
-  if (blanketCount > 0) statParts.push(`${blanketCount} blanket-approved`);
-  if (passCount > 0) statParts.push(`${passCount} approved`);
+  const statParts: string[] = [];
+  statParts.push(`${otRowCount} OT entr${otRowCount === 1 ? 'y' : 'ies'} evaluated`);
+  if (belowThresholdCount > 0) statParts.push(`${belowThresholdCount} at/below ${OT_APPROVAL_MIN}hr threshold (exempt)`);
+  if (blanketApproved.length > 0) statParts.push(`${blanketApproved.length} blanket-approved`);
+  if (approvedCount > 0) statParts.push(`${approvedCount} approved`);
   statParts.push(`${flagged.length} flagged`);
 
   const allDetails = [
