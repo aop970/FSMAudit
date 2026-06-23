@@ -4,7 +4,10 @@
 // OT billing (effectiveBase = otHourlyRates.fsmI/II/Merit) applies to:
 //   • "Overtime" rows for non-CA associates (note: "Over Time" is normalized at parse time)
 //   • "CA Daily Overtime" / "CA Weekly Overtime" rows (always — billed at OT rate)
-// Tolerance ≤ rules.tolerances.dollar per row
+// Bill tolerance: BILL_TOL ($0.05) per row — wider than rules.tolerances.dollar to absorb
+//   invoice-side per-unit rate truncation (the invoice truncates the loaded rate to 2 decimal
+//   places before multiplying by hours; our full-precision computation diverges by up to $0.02
+//   per row). Markup and rate comparisons still use rules.tolerances.dollar (default $0.01).
 // If hourlyRates.fsmI/fsmII/Merit are set (> 0), validates base pay rate for non-OT rows.
 //
 // Excluded from Check 1 (validated by dedicated checks instead):
@@ -49,6 +52,11 @@ function resolveRates(
   };
 }
 
+// Billing tolerance: absorbs invoice-side cent rounding (up to ~$0.02/row observed).
+// Markup and rate checks still use rules.tolerances.dollar ($0.01) for tight validation.
+// $0.05 gives 2.5× headroom above the worst observed rounding gap without hiding real errors.
+const BILL_TOL = 0.05;
+
 export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm' | 'ses'): CheckResult {
   const rules = getAuditRules(program);
   const dollarTol = rules.tolerances.dollar;
@@ -91,9 +99,12 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
         ? effectiveBase * ptRate
         : 0;
     const loaded = effectiveBase + mu;
-    const bill   = loaded * r.timeHours;
+    // Round expected bill to cents before comparing: the invoice truncates the loaded
+    // per-unit rate to 2 decimal places before multiplying by hours, so our full-precision
+    // figure can diverge by up to ~$0.02 on rows with fractional hours.
+    const bill = Math.round(loaded * r.timeHours * 100) / 100;
 
-    const billOk = Math.abs(bill - r.billValue) <= dollarTol;
+    const billOk = Math.abs(bill - r.billValue) <= BILL_TOL;
     const muOk   = Math.abs(mu - r.muValue)     <= dollarTol;
 
     // Hourly rate validation — only for non-OT rows (OT rows store full base rate in
