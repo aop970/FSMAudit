@@ -453,6 +453,74 @@ export function ReviewTab({ runId, checkSlugsFromRun }: ReviewTabProps) {
   );
 }
 
+// ── FindingDetail — renders key fields from the stored flaggedRow detail ────────
+
+function FindingDetail({ detail }: { detail: Record<string, unknown> }) {
+  // Fields present across different checks; render what's available
+  const issue = typeof detail.issue === "string" ? detail.issue : null;
+  const section = typeof detail.section === "string" ? detail.section : null;
+
+  // Labor billing amounts (check01)
+  const actualBill    = typeof detail.actualBill === "string" ? detail.actualBill : null;
+  const expectedBill  = typeof detail.expectedBill === "string" ? detail.expectedBill : null;
+  const deltaBill     = typeof detail.deltaBill === "string" ? detail.deltaBill : null;
+  const actualMU      = typeof detail.actualMU === "string" ? detail.actualMU : null;
+  const expectedMU    = typeof detail.expectedMU === "string" ? detail.expectedMU : null;
+
+  // Holiday fields (check18)
+  const date          = typeof detail.date === "string" ? detail.date : null;
+  const holidayName   = typeof detail.holidayName === "string" ? detail.holidayName : null;
+  const invoicedHours = detail.invoicedHours !== undefined ? String(detail.invoicedHours) : null;
+  const expectedHours = detail.expectedHours !== undefined ? String(detail.expectedHours) : null;
+
+  // Row identifier
+  const rowNum        = detail.row !== undefined ? `row ${detail.row}` : null;
+  const sheet         = typeof detail.sheet === "string" ? detail.sheet : null;
+
+  return (
+    <div
+      className="mt-1 rounded px-2 py-1.5 space-y-0.5 text-[10px]"
+      style={{ backgroundColor: "color-mix(in srgb, var(--mc-bg) 70%, transparent)", border: "1px solid var(--mc-card-border)" }}
+    >
+      {/* Section label if present */}
+      {section && (
+        <p className="font-semibold text-mc-amber">{section}</p>
+      )}
+      {/* Issue text — most important */}
+      {issue && (
+        <p className="text-mc-text leading-snug">{issue}</p>
+      )}
+      {/* Labor billing amounts */}
+      {(actualBill || deltaBill) && (
+        <div className="flex gap-3 flex-wrap mt-0.5">
+          {expectedBill && <span className="text-mc-dim">Expected: <span className="text-mc-text font-mono">{expectedBill}</span></span>}
+          {actualBill   && <span className="text-mc-dim">Actual: <span className="text-mc-text font-mono">{actualBill}</span></span>}
+          {deltaBill    && <span className="text-mc-dim">Delta: <span className="font-mono" style={{ color: deltaBill.startsWith('-') ? '#f87171' : '#22d06b' }}>{deltaBill}</span></span>}
+        </div>
+      )}
+      {/* MU amounts if different from bill */}
+      {!actualBill && actualMU && (
+        <div className="flex gap-3 flex-wrap mt-0.5">
+          {expectedMU && <span className="text-mc-dim">Expected MU: <span className="text-mc-text font-mono">{expectedMU}</span></span>}
+          {actualMU   && <span className="text-mc-dim">Actual MU: <span className="text-mc-text font-mono">{actualMU}</span></span>}
+        </div>
+      )}
+      {/* Holiday date + hours */}
+      {date && (
+        <div className="flex gap-3 flex-wrap mt-0.5">
+          <span className="text-mc-dim">Date: <span className="text-mc-text font-mono">{date}</span></span>
+          {holidayName && <span className="text-mc-dim">{holidayName}</span>}
+          {invoicedHours && <span className="text-mc-dim">Hours: <span className="text-mc-text font-mono">{invoicedHours}</span>{expectedHours ? ` (exp ${expectedHours})` : ""}</span>}
+        </div>
+      )}
+      {/* Row / sheet location */}
+      {(rowNum || sheet) && (
+        <p className="text-mc-dim">{[sheet, rowNum].filter(Boolean).join(" › ")}</p>
+      )}
+    </div>
+  );
+}
+
 // ── FindingRow ───────────────────────────────────────────────────────────────
 
 interface FindingRowProps {
@@ -539,6 +607,11 @@ function FindingRow({ finding, labelState, fpNote, fpIsOpen, onFpNote, onFpOpen,
           <Loader2 className="h-3 w-3 animate-spin text-mc-dim" />
         )}
       </div>
+
+      {/* Detail panel — show flagged-row data inline (T-496 D) */}
+      {finding.detail && !finding.missed_finding && (
+        <FindingDetail detail={finding.detail} />
+      )}
 
       {/* FP note form (inline) */}
       {fpIsOpen && !labeled && (

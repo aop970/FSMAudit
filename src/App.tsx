@@ -22,7 +22,7 @@ import { parseInvoice, parseReferenceCSV, parseTimeOffFile, parseTermedPtoFile, 
 import { runAudit } from './audit/runAudit';
 import { runSesAudit } from './audit/runSesAudit';
 import { runCiAudit } from './audit/runCiAudit';
-import { getAuditRules } from './audit/auditRules';
+import { getAuditRules, initAuditRulesFromServer } from './audit/auditRules';
 import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow, ParsedData, CiControlEntry, CiParsedData } from './audit/types';
 import { runTieredAnalysis } from './ai/bragiClient';
 import type { EmailEntry } from './ai/bragiClient';
@@ -178,11 +178,17 @@ export default function App() {
   // Ref for reference file zone (for the ControlTableBadge scroll-to)
   const refZoneRef = useRef<HTMLDivElement>(null);
 
-  // On mount, seed audit rules (no-op if already present) and control tables
+  // On mount: (1) seed audit rules from server (async), (2) load control tables
   useEffect(() => {
-    getAuditRules('fsm'); // seeds defaults into localStorage if not present
+    // Seed localStorage defaults if not present (synchronous)
+    getAuditRules('fsm');
     getAuditRules('ses');
-    getAuditRules('ci'); // seed CI defaults
+    getAuditRules('ci');
+    // Then load from Neon — populates server cache so subsequent getAuditRules()
+    // calls in the audit engine pick up globally-shared rules (with Memorial Day fix etc.)
+    initAuditRulesFromServer().catch((err) => {
+      console.warn('[App] initAuditRulesFromServer failed (non-fatal):', err);
+    });
     const ct = loadControlTable();
     setControlTable(ct);
     setCtTimestamp(getControlTableTimestamp());

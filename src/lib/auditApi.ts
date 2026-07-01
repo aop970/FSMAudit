@@ -85,6 +85,17 @@ export interface Finding {
   labeled_at: string | null;
   missed_finding: boolean;
   missed_description: string | null;
+  /** Full flagged-row detail from the audit engine (T-496 D). Null on old findings. */
+  detail: Record<string, unknown> | null;
+}
+
+/** Shape returned by GET /api/rules */
+export interface ServerRules {
+  program: string;
+  version: string;
+  rules: Record<string, unknown>;
+  updated_at: string;
+  updated_by: string | null;
 }
 
 /** POST /api/runs — persist an audit run. Returns the new run_id. */
@@ -131,6 +142,54 @@ export async function labelFinding(
   });
   if (!resp.ok) throw new Error(`PATCH /api/findings/${id}/label → ${resp.status}`);
   return resp.json() as Promise<Finding>;
+}
+
+// ── Rules API (T-496 Workstream C) ─────────────────────────────────────────────
+
+/**
+ * GET /api/rules?program= — fetch globally-shared rules from Neon.
+ * Returns null when not yet seeded (404 from server → caller should POST defaults).
+ */
+export async function getRulesFromServer(
+  program: "fsm" | "ses" | "ci"
+): Promise<Record<string, unknown> | null> {
+  const resp = await fetch(`${BASE_URL}/api/rules?program=${program}`, {
+    headers: authHeaders(),
+  });
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`GET /api/rules?program=${program} → ${resp.status}`);
+  const data = (await resp.json()) as ServerRules;
+  return data.rules;
+}
+
+/**
+ * POST /api/rules — upsert rules to Neon for a program.
+ * Fire-and-forget safe; callers should catch.
+ */
+export async function saveRulesToServer(
+  program: "fsm" | "ses" | "ci",
+  rules: Record<string, unknown>,
+  updatedBy?: string
+): Promise<void> {
+  const resp = await fetch(`${BASE_URL}/api/rules`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ program, rules, updated_by: updatedBy ?? "browser" }),
+  });
+  if (!resp.ok) throw new Error(`POST /api/rules → ${resp.status}`);
+}
+
+/**
+ * POST /api/rules/reset?program= — delete server row; client re-seeds from defaults on next load.
+ */
+export async function resetRulesToDefault(
+  program: "fsm" | "ses" | "ci"
+): Promise<void> {
+  const resp = await fetch(`${BASE_URL}/api/rules/reset?program=${program}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`POST /api/rules/reset?program=${program} → ${resp.status}`);
 }
 
 /** POST /api/runs/:run_id/missed-finding — log a false-negative (missed issue). */
