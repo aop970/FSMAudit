@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, Loader2, RotateCcw, Eye, EyeOff, Sparkles, Mail, X as XIcon } from 'lucide-react';
+import { Play, Loader2, RotateCcw, Eye, EyeOff, Sparkles, Mail, X as XIcon, CheckCircle, AlertCircle, ClipboardList } from 'lucide-react';
 import Papa from 'papaparse';
 import { Header } from './components/Header';
 import { MultiDropZone } from './components/MultiDropZone';
@@ -27,6 +27,8 @@ import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoR
 import { runTieredAnalysis } from './ai/bragiClient';
 import type { EmailEntry } from './ai/bragiClient';
 import type { AnalyzeAllState } from './components/AnalyzeAllButton';
+import { ReviewTab } from './components/ReviewTab';
+import { postRun, isApiConfigured, checkNameToSlug } from './lib/auditApi';
 
 /** Parse an Outlook-style email CSV export into EmailEntry array */
 function parseEmailCSV(file: File): Promise<EmailEntry[]> {
@@ -99,6 +101,11 @@ export default function App() {
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
   const [payload, setPayload]         = useState<AuditPayload | null>(null);
   const [parsedData, setParsedData]   = useState<ParsedData | CiParsedData | null>(null);
+
+  // Eval persistence state
+  const [runId, setRunId]             = useState<number | null>(null);
+  const [saveStatus, setSaveStatus]   = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [activeTab, setActiveTab]     = useState<'results' | 'review'>('results');
 
   // Control tables
   const [controlTable, setControlTable] = useState<ControlTableEntry[]>(() => loadControlTable());
@@ -221,6 +228,21 @@ export default function App() {
     })();
   }, [refFile]);
 
+  /** Fire-and-forget: persist the completed run to the API. Non-blocking. */
+  function persistRun(completedPayload: AuditPayload, prog: 'fsm' | 'ses' | 'ci') {
+    if (!isApiConfigured()) return;
+    setSaveStatus('saving');
+    postRun({ ...completedPayload, program: prog })
+      .then(({ run_id }) => {
+        setRunId(run_id);
+        setSaveStatus('saved');
+      })
+      .catch((err: unknown) => {
+        console.warn('[App] postRun failed (non-blocking):', err);
+        setSaveStatus('error');
+      });
+  }
+
   async function runAuditHandler() {
     if (!invoiceFile) {
       setErrorMsg('Please upload an invoice file (.xlsx or .xlsb).');
@@ -246,6 +268,7 @@ export default function App() {
         setParsedData(ciParsed);
         setAppState('done');
         setStatusMsg('');
+        persistRun(result, 'ci');
       } else if (program === 'ses') {
         const parsed = await parseSesInvoice(invoiceFile, punchFile, shiftFile1, shiftFile2);
 
@@ -279,6 +302,7 @@ export default function App() {
         setParsedData(parsed);
         setAppState('done');
         setStatusMsg('');
+        persistRun(result, 'ses');
       } else {
         const parsed = await parseInvoice(invoiceFile, punchFile);
 
@@ -315,6 +339,7 @@ export default function App() {
         setParsedData(parsed);
         setAppState('done');
         setStatusMsg('');
+        persistRun(result, 'fsm');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -349,6 +374,9 @@ export default function App() {
     setErrorMsg(null);
     setStatusMsg('');
     clearAnalyzeAll();
+    setRunId(null);
+    setSaveStatus('idle');
+    setActiveTab('results');
   }
 
   const busy = appState === 'parsing' || appState === 'auditing';
@@ -677,7 +705,48 @@ export default function App() {
         </aside>
 
         {/* ── CENTER PANEL: results ── */}
-        <main className="flex-1 overflow-y-auto px-6 py-6 space-y-6 bg-mc-bg">
+        <main className="flex-1 overflow-y-auto px-6 py-6 bg-mc-bg" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+
+          {/* Tab bar + save badge (only when payload exists) */}
+          {payload && !busy && (
+            <div className="flex items-center justify-between mb-4" style={{ borderBottom: '1px solid var(--mc-card-border)', paddingBottom: '8px' }}>
+              <div className="flex gap-1">
+                {(['results', 'review'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className="flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold transition"
+                    style={{
+                      backgroundColor: activeTab === tab ? 'var(--mc-blue)' : 'transparent',
+                      color: activeTab === tab ? '#fff' : 'var(--mc-text-dim)',
+                    }}
+                  >
+                    {tab === 'review' && <ClipboardList className="h-3 w-3" />}
+                    {tab === 'results' ? 'Results' : 'Review'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Save status badge */}
+              {isApiConfigured() && saveStatus !== 'idle' && (
+                <div className="flex items-center gap-1.5">
+                  {saveStatus === 'saving' && (
+                    <><Loader2 className="h-3 w-3 animate-spin text-mc-dim" /><span className="text-[10px] text-mc-dim">Saving run…</span></>
+                  )}
+                  {saveStatus === 'saved' && (
+                    <><CheckCircle className="h-3 w-3 text-mc-green" /><span className="text-[10px] text-mc-green">Run saved ✓</span></>
+                  )}
+                  {saveStatus === 'error' && (
+                    <><AlertCircle className="h-3 w-3 text-mc-amber" /><span className="text-[10px] text-mc-amber">Run not saved</span></>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex-1 space-y-6">
+
           {!payload && !busy && (
             <div className="mt-16 rounded-xl border-2 border-dashed px-8 py-16 text-center" style={{ borderColor: 'color-mix(in srgb, var(--mc-blue) 20%, transparent)', backgroundColor: 'color-mix(in srgb, var(--mc-bg2) 40%, transparent)' }}>
               <p className="text-sm font-semibold text-mc-text">No audit run yet</p>
@@ -697,7 +766,7 @@ export default function App() {
             </div>
           )}
 
-          {payload && !busy && (
+          {payload && !busy && activeTab === 'results' && (
             <>
               {/* Summary */}
               <section>
@@ -752,6 +821,15 @@ export default function App() {
               </div>
             </>
           )}
+
+          {payload && !busy && activeTab === 'review' && (
+            <ReviewTab
+              runId={runId}
+              checkSlugsFromRun={[...new Set(payload.results.map((r) => checkNameToSlug(r.checkName)))]}
+            />
+          )}
+
+          </div>{/* end flex-1 space-y-6 */}
         </main>
 
         {/* ── RIGHT PANEL: status / key summary ── */}
