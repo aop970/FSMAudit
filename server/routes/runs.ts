@@ -74,11 +74,15 @@ function invoiceRefFromFilename(invoiceFile: string): string {
 }
 
 function entityRef(row: Record<string, unknown>): string | null {
+  // Try associate ID first (most specific)
   const id = row["associateId"] ?? row["associate_id"];
   if (typeof id === "string" && id.trim()) return id.trim();
-  const name = row["employeeName"] ?? row["employee_name"];
+  // Most checks emit 'name' (check01, check18, check07, etc.)
+  // check17/OT math uses 'employeeName'; normalize both
+  const name = row["name"] ?? row["employeeName"] ?? row["employee_name"];
   if (typeof name === "string" && name.trim()) return name.trim();
-  const rowNum = row["rowNum"] ?? row["row_num"];
+  // Fall back to row number — check01 emits 'row', older code used 'rowNum'
+  const rowNum = row["row"] ?? row["rowNum"] ?? row["row_num"];
   if (rowNum !== undefined) return `row:${rowNum}`;
   return null;
 }
@@ -110,23 +114,35 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     ` as { id: number }[];
     const runId: number = run.id;
 
-    // Insert findings: one row per flagged entity, or one aggregate row if no flagged rows
+    // Insert findings:
+    //   pass/na  → always ONE aggregate row (prevents explosion from pass checks with data)
+    //   flag/warn → one row per flagged entity (or one aggregate if no flaggedRows)
+    // Each flag/warn finding stores the full flaggedRow as `detail` JSONB so the
+    // Review tab can display name, issue text, and key amounts without opening the invoice.
     const results = payload.results as CheckResult[];
     for (const r of results) {
       const checkId = nameToSlug(r.checkName);
       const verdict = statusToVerdict(r.status);
 
-      if (!r.flaggedRows || r.flaggedRows.length === 0) {
+      if (verdict === "pass" || verdict === "na") {
+        // Always single aggregate row for clean checks — no per-detail explosion
         await sql`
-          INSERT INTO audit_findings (run_id, check_id, verdict, entity_ref)
-          VALUES (${runId}, ${checkId}, ${verdict}, NULL)
+          INSERT INTO audit_findings (run_id, check_id, verdict, entity_ref, detail)
+          VALUES (${runId}, ${checkId}, ${verdict}, NULL, NULL)
+        `;
+      } else if (!r.flaggedRows || r.flaggedRows.length === 0) {
+        // flag/warn with no detail rows — aggregate
+        await sql`
+          INSERT INTO audit_findings (run_id, check_id, verdict, entity_ref, detail)
+          VALUES (${runId}, ${checkId}, ${verdict}, NULL, NULL)
         `;
       } else {
+        // flag/warn with per-row detail — one finding per flagged entity
         for (const row of r.flaggedRows) {
           const eRef = entityRef(row);
           await sql`
-            INSERT INTO audit_findings (run_id, check_id, verdict, entity_ref)
-            VALUES (${runId}, ${checkId}, ${verdict}, ${eRef})
+            INSERT INTO audit_findings (run_id, check_id, verdict, entity_ref, detail)
+            VALUES (${runId}, ${checkId}, ${verdict}, ${eRef}, ${JSON.stringify(row)})
           `;
         }
       }
@@ -165,7 +181,7 @@ router.get("/:id/findings", async (req: Request, res: Response): Promise<void> =
     }
     const findings = await sql`
       SELECT id, check_id, verdict, severity, confidence, entity_ref,
-             label, label_note, labeled_at, missed_finding, missed_description
+             label, label_note, labeled_at, missed_finding, missed_description, detail
       FROM audit_findings
       WHERE run_id = ${runId}
       ORDER BY check_id, id

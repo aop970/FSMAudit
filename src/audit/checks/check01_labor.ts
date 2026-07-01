@@ -53,9 +53,13 @@ function resolveRates(
 }
 
 // Billing tolerance: absorbs invoice-side cent rounding (up to ~$0.02/row observed).
-// Markup and rate checks still use rules.tolerances.dollar ($0.01) for tight validation.
 // $0.05 gives 2.5× headroom above the worst observed rounding gap without hiding real errors.
+// MU_TOL matches BILL_TOL: vendors sometimes truncate the per-unit markup (e.g. $8.62→$8.60)
+// before multiplying by hours. This produces a sub-$0.02 MU discrepancy that is cosmetic —
+// the bill total is still within BILL_TOL. Using a tight dollarTol on MU produced 165 false
+// positives in run #4 (T-496). Rate checks still use rules.tolerances.dollar ($0.01).
 const BILL_TOL = 0.05;
+const MU_TOL   = BILL_TOL; // absorb vendor-side markup truncation (mirrors bill tolerance)
 
 export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm' | 'ses'): CheckResult {
   const rules = getAuditRules(program);
@@ -105,7 +109,7 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
     const bill = Math.round(loaded * r.timeHours * 100) / 100;
 
     const billOk = Math.abs(bill - r.billValue) <= BILL_TOL;
-    const muOk   = Math.abs(mu - r.muValue)     <= dollarTol;
+    const muOk   = Math.abs(mu - r.muValue)     <= MU_TOL;
 
     // Hourly rate validation — only for non-OT rows (OT rows store full base rate in
     // the spreadsheet but bill at the OT rate, so the rate check is skipped for them).

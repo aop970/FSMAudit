@@ -3,12 +3,13 @@
 // its own Save and Reset to Default. Changes are not auto-saved.
 // Unsaved edits show a yellow dot on the section header.
 
-import { useState, useCallback, createContext, useContext } from 'react';
+import { useState, useCallback, createContext, useContext, useEffect } from 'react';
 import {
   type AuditRules,
   type CustomRule,
   type HolidayEntry,
   type RuleType,
+  type RulesSyncStatus,
   DEFAULT_RULES,
   DEFAULT_SES_RULES,
   getAuditRules,
@@ -16,12 +17,43 @@ import {
   resetSection,
   resetAllRules,
   writeAuditRules,
+  getRulesSyncStatus,
+  uploadLocalRulesToServer,
 } from '../audit/auditRules';
+import { isApiConfigured } from '../lib/auditApi';
 
 // ── Program context (avoids prop-drilling to every section) ───────────────────
 
 const ProgramCtx = createContext<'fsm' | 'ses' | 'ci'>('fsm');
 function useProgram() { return useContext(ProgramCtx); }
+
+// ── Sync status badge (T-496 Workstream C) ────────────────────────────────────
+
+function SyncBadge({ status }: { status: RulesSyncStatus }) {
+  if (status === 'server') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+        style={{ backgroundColor: 'color-mix(in srgb, #22d06b 12%, transparent)', color: '#22d06b', border: '1px solid color-mix(in srgb, #22d06b 25%, transparent)' }}
+        title="Rules are synced with the shared Neon database"
+      >
+        synced ✓
+      </span>
+    );
+  }
+  if (status === 'local') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+        style={{ backgroundColor: 'color-mix(in srgb, #ffba08 10%, transparent)', color: '#ffba08', border: '1px solid color-mix(in srgb, #ffba08 25%, transparent)' }}
+        title="Rules are stored locally only — server sync unavailable"
+      >
+        local only
+      </span>
+    );
+  }
+  return null; // 'unknown' — loading, show nothing
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -1505,6 +1537,29 @@ export function AuditRulesPanel({
   const [rules] = useState<AuditRules>(() => getAuditRules(program));
   const [resetAllState, triggerResetAll] = useSaveState();
 
+  // Sync status badge
+  const [syncStatus, setSyncStatus] = useState<RulesSyncStatus>(() => getRulesSyncStatus(program));
+  const [uploading, setUploading] = useState(false);
+
+  // Poll sync status while panel is open (refreshes after writeAuditRules async push)
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setSyncStatus(getRulesSyncStatus(program));
+    }, 1500);
+    return () => clearInterval(iv);
+  }, [program]);
+
+  async function handleUploadLocal() {
+    if (!isApiConfigured()) return;
+    setUploading(true);
+    try {
+      await uploadLocalRulesToServer(program);
+      setSyncStatus(getRulesSyncStatus(program));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   function handleResetAll() {
     const defaults = program === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
     const ok = program === 'ses' ? writeAuditRules(defaults, 'ses') : resetAllRules();
@@ -1528,11 +1583,24 @@ export function AuditRulesPanel({
         className="flex items-center justify-between px-5 py-4 shrink-0"
         style={{ borderBottom: '1px solid var(--mc-card-border)' }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-base">⚙️</span>
           <h2 className="text-sm font-bold text-mc-text">
             Audit Rules {program === 'ses' && <span className="ml-1 text-xs font-normal text-mc-dim">(SES)</span>}
+            {program === 'ci' && <span className="ml-1 text-xs font-normal text-mc-dim">(CI)</span>}
           </h2>
+          <SyncBadge status={syncStatus} />
+          {isApiConfigured() && syncStatus === 'local' && (
+            <button
+              type="button"
+              onClick={handleUploadLocal}
+              disabled={uploading}
+              className="text-[10px] text-mc-blue underline hover:text-[#2a8aee] transition disabled:opacity-50"
+              title="Push current local rules to the shared server"
+            >
+              {uploading ? 'Uploading…' : 'Upload to server'}
+            </button>
+          )}
         </div>
         <button
           type="button"

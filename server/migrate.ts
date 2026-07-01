@@ -43,8 +43,23 @@ async function migrate() {
       label_note         TEXT,
       labeled_at         TIMESTAMPTZ,
       missed_finding     BOOLEAN NOT NULL DEFAULT FALSE,
-      missed_description TEXT
+      missed_description TEXT,
+      detail             JSONB
     )
+  `;
+
+  // Additive: add detail column to existing tables (IF NOT EXISTS-style via DO block)
+  await sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'audit_findings' AND column_name = 'detail'
+      ) THEN
+        ALTER TABLE audit_findings ADD COLUMN detail JSONB;
+      END IF;
+    END;
+    $$
   `;
 
   await sql`
@@ -55,7 +70,23 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS idx_findings_check_id ON audit_findings(check_id)
   `;
 
-  console.log("[migrate] Complete — 2 tables, 4 indexes");
+  // ── audit_rules: one row per program (fsm/ses/ci), globally shared ─────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS audit_rules (
+      id         SERIAL PRIMARY KEY,
+      program    TEXT UNIQUE NOT NULL CHECK (program IN ('fsm', 'ses', 'ci')),
+      version    TEXT NOT NULL DEFAULT 'v1',
+      rules      JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by TEXT
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_rules_program ON audit_rules(program)
+  `;
+
+  console.log("[migrate] Complete — 3 tables, 6 indexes");
 }
 
 migrate().catch((err: unknown) => {

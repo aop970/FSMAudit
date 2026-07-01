@@ -3,6 +3,7 @@ import cors from "cors";
 import { runsRouter } from "./routes/runs.ts";
 import { findingsRouter } from "./routes/findings.ts";
 import { missedRouter } from "./routes/missed.ts";
+import { rulesRouter } from "./routes/rules.ts";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -32,6 +33,8 @@ app.use("/api/runs", runsRouter);
 app.use("/api/findings", findingsRouter);
 // Missed-finding route mounts under /api/runs/:run_id/missed-finding
 app.use("/api/runs", missedRouter);
+// Rules route: GET/POST /api/rules, POST /api/rules/reset
+app.use("/api/rules", rulesRouter);
 
 app.listen(PORT, () => {
   console.log(`[server] Listening on port ${PORT}`);
