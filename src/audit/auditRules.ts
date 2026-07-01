@@ -235,34 +235,45 @@ export function getRulesSyncStatus(program?: 'fsm' | 'ses' | 'ci'): RulesSyncSta
 
 /**
  * Async init — call from App.tsx useEffect on mount.
- * Fetches rules from server, writes to localStorage backup + module cache.
- * If server has no row for a program yet, seeds it from defaults.
+ * When the server HAS rules for a program: load them into cache + mirror to localStorage.
+ * When the server has NONE: leave the browser on its local rules and mark 'local' — never
+ * auto-seed defaults to the server (that would clobber Allan's local rules; T-496/Vera).
+ * Neon is populated only by the explicit uploadLocalRulesToServer action.
  * Never throws — API failure falls back silently to localStorage.
  */
 export async function initAuditRulesFromServer(): Promise<void> {
   // Lazy import to avoid circular dep — auditApi imports nothing from auditRules
-  const { getRulesFromServer, saveRulesToServer, isApiConfigured } = await import('../lib/auditApi');
+  const { getRulesFromServer, isApiConfigured } = await import('../lib/auditApi');
   if (!isApiConfigured()) return;
 
   const programs: ('fsm' | 'ses' | 'ci')[] = ['fsm', 'ses', 'ci'];
   for (const prog of programs) {
     try {
-      let serverRules = await getRulesFromServer(prog);
+      const serverRules = await getRulesFromServer(prog);
 
       if (!serverRules) {
-        // Not seeded yet — push current defaults (with Memorial Day fix) to server
-        const defs = defaultRules(prog);
-        await saveRulesToServer(prog, defs as unknown as Record<string, unknown>, 'init');
-        serverRules = defs as unknown as Record<string, unknown>;
+        // Server has NO rules for this program yet. Do NOT auto-seed with hardcoded
+        // defaults and do NOT overwrite localStorage — that would let the first browser
+        // to load after deploy establish a zeroed/default ruleset as the GLOBAL shared
+        // set, clobbering Allan's real configured rates/custom rules that live only in
+        // his browser's localStorage (nondeterministic first-loader-wins). (T-496, Vera)
+        //
+        // Instead: leave the browser operating on its effective local rules
+        // (getAuditRules already merges localStorage over defaults) and mark 'local' so
+        // the "Upload to server" prompt surfaces. Neon is populated ONLY by the explicit
+        // uploadLocalRulesToServer action from a deliberately-configured machine.
+        _syncStatus.set(prog, 'local');
+        continue;
       }
 
-      // Merge server rules with defaults (safe against schema gaps)
+      // Server HAS rules — load them into cache and let them win.
+      // Merge with defaults only to fill schema gaps (new fields on older stored data).
       const defs = defaultRules(prog);
       const merged = deepMerge(defs, serverRules as Partial<AuditRules>);
 
-      // Update module cache and localStorage backup
       _serverCache.set(prog, merged);
       _syncStatus.set(prog, 'server');
+      // Safe to mirror to localStorage: this is a REAL server ruleset, not defaults.
       try { localStorage.setItem(storageKey(prog), JSON.stringify(merged)); } catch { /* ok */ }
     } catch (err) {
       // API error — log and fall back to localStorage; don't crash audit

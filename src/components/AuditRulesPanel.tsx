@@ -20,7 +20,7 @@ import {
   getRulesSyncStatus,
   uploadLocalRulesToServer,
 } from '../audit/auditRules';
-import { isApiConfigured } from '../lib/auditApi';
+import { isApiConfigured, resetRulesToDefault } from '../lib/auditApi';
 
 // ── Program context (avoids prop-drilling to every section) ───────────────────
 
@@ -1560,11 +1560,17 @@ export function AuditRulesPanel({
     }
   }
 
-  function handleResetAll() {
+  async function handleResetAll() {
     const defaults = program === 'ses' ? DEFAULT_SES_RULES : DEFAULT_RULES;
     const ok = program === 'ses' ? writeAuditRules(defaults, 'ses') : resetAllRules();
     triggerResetAll(ok);
-    // Brief delay then close so user sees the confirm, then re-open will re-seed
+    // Also clear the shared server row so the global set returns to "unseeded"
+    // (explicit, deliberate action — not the nondeterministic auto-seed Vera flagged).
+    // On reload, init finds no server rules → 'local' status, localStorage holds defaults.
+    if (ok && isApiConfigured()) {
+      try { await resetRulesToDefault(program); } catch { /* non-fatal */ }
+    }
+    // Brief delay then close so user sees the confirm, then re-open reflects local defaults
     if (ok) setTimeout(() => window.location.reload(), 800);
   }
 
