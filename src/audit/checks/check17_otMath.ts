@@ -45,6 +45,11 @@ import { getAuditRules } from '../auditRules';
 import { isRhodeIsland } from './check16_riSundayPremium';
 
 const TOLERANCE = 0.05;
+// RI retail Sunday exclusion assertions use a tighter spec tolerance (±0.01, note 41 /
+// DL-2026-0706b). Applied to assertion (b) always, and to assertion (a) only when the
+// Sunday exclusion is active — non-RI weeks retain the existing ±0.05 OT-math tolerance
+// so no v1 employee-week regresses ("collapses to the existing check unchanged").
+const RI_TOLERANCE = 0.01;
 
 // ── State classifiers ─────────────────────────────────────────────────────────
 
@@ -320,8 +325,11 @@ export function check17OtMath(
     const expectedOt = otBase > 40 ? otBase - 40 : 0;
 
     // Assertion (a): invoiced OT must match expected OT on non-Sunday hours.
+    // Tighten to ±0.01 only when the RI Sunday exclusion is in play; otherwise the
+    // check is the unchanged v1 OT-math check at ±0.05.
+    const otTolerance = entry.sundayRiEligibleHrs > 0 ? RI_TOLERANCE : TOLERANCE;
     const otDiff = Math.abs(expectedOt - entry.invoicedOtHrs);
-    if (otDiff > TOLERANCE) {
+    if (otDiff > otTolerance) {
       nonCaPrFailures.push({
         section: 'OT Math Validation — Non-CA/PR',
         employeeName: entry.employeeName,
@@ -344,7 +352,7 @@ export function check17OtMath(
     // Only fires when there are RI Sunday hours or invoiced RI premium rows.
     if (entry.sundayRiEligibleHrs > 0 || entry.invoicedRiPremHrs > 0) {
       const premDiff = Math.abs(entry.invoicedRiPremHrs - entry.sundayRiEligibleHrs);
-      if (premDiff > TOLERANCE) {
+      if (premDiff > RI_TOLERANCE) {
         nonCaPrFailures.push({
           section: 'OT Math Validation — RI Sunday Premium',
           employeeName: entry.employeeName,
