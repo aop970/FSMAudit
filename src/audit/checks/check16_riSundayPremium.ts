@@ -1,17 +1,24 @@
-// Check 16 — Rhode Island Sunday Premium Pay
-// Rhode Island law requires premium pay for employees working on Sundays.
-// Flag any FSM I or FSM II labor row where:
-//   - The associate's state is Rhode Island (value may be "Rhode Island" or "RI")
-//   - The visit date falls on a Sunday (getDay() === 0)
+// Check 16 — Rhode Island Sunday Premium Pay Validator
 //
-// This is a flag-for-review only — no rate calculation, no billing verification.
-// Status is 'warning' (not 'fail') so Allan can do a manual rate adjustment.
+// Rhode Island retail law (§ 28-12-4.1(b)) requires premium pay for Sunday work.
+// The invoice represents this as two rows per base Sunday entry:
+//   Base row:    any eligible time type, Sunday, RI associate
+//   Premium row: comments = 'RI Sunday Premium Pay', same associate/date/hours,
+//                basePayRate = base.basePayRate / 2, muValue = base.muValue / 2
+//
+// This check validates the two-row split. It does NOT flag correctly-formed pairs.
+//
+// Flag types:
+//   FLAG_MISSING_PREMIUM  — base row has no matching premium row
+//   FLAG_WRONG_RATE       — premium row exists but rate math is wrong
+//   FLAG_ORPHAN_PREMIUM   — premium row exists with no corresponding base row
+//   HOUR_MISMATCH         — premium hours differ from base hours (tolerance 0.01)
 
 import type { CheckResult, LaborRow } from '../types';
 
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-function isRhodeIsland(state: string): boolean {
+export function isRhodeIsland(state: string): boolean {
   const s = state.trim().toLowerCase();
   return s === 'rhode island' || s === 'ri';
 }
@@ -20,40 +27,179 @@ function isSunday(date: Date): boolean {
   return date.getDay() === 0;
 }
 
-export function check16RiSundayPremium(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
-  const flagged: Record<string, unknown>[] = [];
+function normalizeType(comments: string): string {
+  return comments.trim().toLowerCase();
+}
 
+function toDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const HOURS_TOLERANCE = 0.01;  // hours match tolerance
+const MU_TOLERANCE = 0.001;    // raw MU tolerance — do NOT cent-round MU
+const RATE_TOLERANCE = 0.01;   // cent tolerance for basePayRate
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export function check16RiSundayPremium(fsmI: LaborRow[], fsmII: LaborRow[]): CheckResult {
   const allRows = [
     ...fsmI.map((r) => ({ ...r, _tab: 'FSM I' as const })),
     ...fsmII.map((r) => ({ ...r, _tab: 'FSM II' as const })),
   ];
 
-  for (const row of allRows) {
-    if (!isRhodeIsland(row.associateState)) continue;
-    if (!row.visitDate) continue;
-    if (!isSunday(row.visitDate)) continue;
+  // Separate base rows and premium rows.
+  // Base: RI + Sunday + NOT premium comment
+  // Premium: 'ri sunday premium pay' comment (any date/state — orphan detection catches bad ones)
+  const baseRows = allRows.filter(
+    (r) =>
+      isRhodeIsland(r.associateState) &&
+      r.visitDate !== null &&
+      isSunday(r.visitDate!) &&
+      normalizeType(r.comments) !== 'ri sunday premium pay',
+  );
 
+  const premiumRows = allRows.filter(
+    (r) => normalizeType(r.comments) === 'ri sunday premium pay',
+  );
+
+  // Group premium rows by (associateId, dateKey) into mutable pools.
+  // Each pool entry is consumed as base rows are matched.
+  type PremiumPool = (typeof premiumRows[number])[];
+  const premiumPool = new Map<string, PremiumPool>();
+  for (const pr of premiumRows) {
+    if (!pr.visitDate) continue; // orphan with no date — handled below
+    const poolKey = `${pr.associateId.toLowerCase()}|${toDateKey(pr.visitDate)}`;
+    if (!premiumPool.has(poolKey)) premiumPool.set(poolKey, []);
+    premiumPool.get(poolKey)!.push(pr);
+  }
+
+  // Track which premium rows got matched (to find true orphans later).
+  const matchedPremiumRows = new Set<number>(); // by rowNum
+
+  const flagged: Record<string, unknown>[] = [];
+
+  // ── Match base rows to premium rows ──────────────────────────────────────────
+
+  for (const base of baseRows) {
+    const poolKey = `${base.associateId.toLowerCase()}|${toDateKey(base.visitDate!)}`;
+    const pool = premiumPool.get(poolKey) ?? [];
+
+    // Find nearest-hours match (spec: nearest timeHours, tie-break by category).
+    let bestIdx = -1;
+    let bestDiff = Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const diff = Math.abs(pool[i].timeHours - base.timeHours);
+      if (diff > HOURS_TOLERANCE) continue;
+      if (diff < bestDiff || (diff === bestDiff && pool[i].comments < pool[bestIdx]?.comments)) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx === -1) {
+      // No matching premium row found.
+      flagged.push({
+        section: 'FLAG_MISSING_PREMIUM',
+        sheet: base.sheet,
+        row: base.rowNum,
+        name: base.employeeName,
+        associateId: base.associateId,
+        visitDate: base.visitDate!.toLocaleDateString(),
+        hours: base.timeHours.toFixed(2),
+        category: base.comments,
+        tab: base._tab,
+        issue: `RI Sunday base row has no matching premium row (expected 'RI Sunday Premium Pay' row with ${base.timeHours.toFixed(2)}h)`,
+      });
+      continue;
+    }
+
+    // Consume the matched premium row.
+    const matched = pool[bestIdx];
+    pool.splice(bestIdx, 1);
+    matchedPremiumRows.add(matched.rowNum);
+
+    // Validate rate math.
+    // basePayRate: expected = base.basePayRate / 2, tolerance ±0.01 (cent)
+    // muValue: expected = base.muValue / 2 (raw — do NOT cent-round), tolerance ±0.001
+    const expectedBasePayRate = base.basePayRate / 2;
+    const expectedMuValue = base.muValue / 2;
+
+    const rateOk = Math.abs(matched.basePayRate - expectedBasePayRate) <= RATE_TOLERANCE;
+    const muOk = Math.abs(matched.muValue - expectedMuValue) <= MU_TOLERANCE;
+    const hoursOk = Math.abs(matched.timeHours - base.timeHours) <= HOURS_TOLERANCE;
+
+    if (!rateOk || !muOk || !hoursOk) {
+      const issues: string[] = [];
+      if (!rateOk) issues.push(`basePayRate: expected ${expectedBasePayRate.toFixed(4)} (±0.01), got ${matched.basePayRate.toFixed(4)}`);
+      if (!muOk) issues.push(`muValue: expected ${expectedMuValue} (±0.001), got ${matched.muValue}`);
+      if (!hoursOk) issues.push(`hours: expected ${base.timeHours.toFixed(4)}, got ${matched.timeHours.toFixed(4)}`);
+      flagged.push({
+        section: !hoursOk ? 'HOUR_MISMATCH' : 'FLAG_WRONG_RATE',
+        sheet: base.sheet,
+        row: base.rowNum,
+        premiumRow: matched.rowNum,
+        name: base.employeeName,
+        associateId: base.associateId,
+        visitDate: base.visitDate!.toLocaleDateString(),
+        baseHours: base.timeHours.toFixed(4),
+        premiumHours: matched.timeHours.toFixed(4),
+        basePayRate: base.basePayRate,
+        expectedPremiumBasePayRate: expectedBasePayRate,
+        actualPremiumBasePayRate: matched.basePayRate,
+        expectedPremiumMu: expectedMuValue,
+        actualPremiumMu: matched.muValue,
+        issue: issues.join('; '),
+      });
+    }
+    // If all OK — correctly-formed pair → no flag (pass).
+  }
+
+  // ── Orphan premium rows (unmatched after all base rows consumed) ──────────────
+
+  for (const pr of premiumRows) {
+    if (matchedPremiumRows.has(pr.rowNum)) continue;
     flagged.push({
-      name: row.employeeName,
-      associateId: row.associateId,
-      visitDate: row.visitDate.toLocaleDateString(),
-      dayOfWeek: DAY_NAMES[row.visitDate.getDay()],
-      state: row.associateState,
-      hours: row.timeHours.toFixed(2),
-      category: row.comments,
-      tab: row._tab,
+      section: 'FLAG_ORPHAN_PREMIUM',
+      sheet: pr.sheet,
+      row: pr.rowNum,
+      name: pr.employeeName,
+      associateId: pr.associateId,
+      visitDate: pr.visitDate?.toLocaleDateString() ?? '(no date)',
+      hours: pr.timeHours.toFixed(2),
+      issue: `RI Sunday premium row has no matching base row — possible overbilling`,
     });
   }
 
-  const found = flagged.length > 0;
+  const totalFlagged = flagged.length;
+  const status = totalFlagged > 0 ? 'fail' : (baseRows.length > 0 ? 'pass' : 'pass');
+
+  const stats = totalFlagged > 0
+    ? `${totalFlagged} issue${totalFlagged === 1 ? '' : 's'} — ${[
+        flagged.filter((f) => f.section === 'FLAG_MISSING_PREMIUM').length > 0
+          ? `${flagged.filter((f) => f.section === 'FLAG_MISSING_PREMIUM').length} missing premium`
+          : '',
+        flagged.filter((f) => f.section === 'FLAG_WRONG_RATE').length > 0
+          ? `${flagged.filter((f) => f.section === 'FLAG_WRONG_RATE').length} wrong rate`
+          : '',
+        flagged.filter((f) => f.section === 'FLAG_ORPHAN_PREMIUM').length > 0
+          ? `${flagged.filter((f) => f.section === 'FLAG_ORPHAN_PREMIUM').length} orphan premium`
+          : '',
+        flagged.filter((f) => f.section === 'HOUR_MISMATCH').length > 0
+          ? `${flagged.filter((f) => f.section === 'HOUR_MISMATCH').length} hour mismatch`
+          : '',
+      ].filter(Boolean).join(', ')}`
+    : baseRows.length > 0
+    ? `${baseRows.length} RI Sunday base row${baseRows.length === 1 ? '' : 's'} validated — all premium pairs correct`
+    : 'No RI Sunday entries found';
+
   return {
     checkId: 16,
     checkName: 'RI Sunday Premium Pay',
-    status: found ? 'warning' : 'pass',
-    stats: found
-      ? `${flagged.length} row${flagged.length === 1 ? '' : 's'} flagged — RI Sunday entries require manual premium pay review`
-      : 'No RI Sunday entries found',
-    flaggedCount: flagged.length,
+    status,
+    stats,
+    flaggedCount: totalFlagged,
     flaggedRows: flagged,
   };
 }

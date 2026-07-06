@@ -104,7 +104,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
     const program = (payload.program as string) ?? "fsm";
     const invoiceRef = invoiceRefFromFilename(payload.invoiceFile as string);
-    const rulesetVer = "v1";
+    const rulesetVer = "v2";
 
     // Insert run record
     const [run] = await sql`

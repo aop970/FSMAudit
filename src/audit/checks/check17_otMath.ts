@@ -16,9 +16,17 @@
 //   "CA Weekly Overtime"      — CA weekly OT row (date range OK)
 //   "Puerto Rico Daily Overtime" / "Puerto Rico Daily OT" / "PR Daily Overtime" / "PR Daily OT"
 //   "Puerto Rico Weekly Overtime" / "Puerto Rico Weekly OT" / "PR Weekly Overtime" / "PR Weekly OT"
+//   "RI Sunday Premium Pay"   — RI retail Sunday premium (non-CA/PR only)
 //
 // Non-CA/PR employees — Weekly OT (40h threshold, Mon-Sun weeks):
 //   Sum eligible hours per employee per work week. If > 40, expected OT = eligible - 40.
+//
+//   RI RETAIL SUNDAY EXCLUSION (§ 28-12-4.1(b)):
+//   Sunday hours are EXCLUDED from the weekly OT base. No hour carries two premiums.
+//     expectedOt = max(0, (totalEligibleHrs − sundayRiEligibleHrs) − 40)
+//     invoicedRiPremHrs must ≈ sundayRiEligibleHrs (±0.05)
+//   Both assertions are independent. For non-RI weeks sundayRiEligibleHrs = 0 and
+//   assertion (a) collapses to the existing OT check unchanged.
 //
 // California AND Puerto Rico employees — Greater-of daily vs weekly OT:
 //   Daily OT  = sum of max(0, eligibleHrsPerDay - 8) across all days in the week
@@ -34,6 +42,7 @@
 
 import type { CheckResult, LaborRow } from '../types';
 import { getAuditRules } from '../auditRules';
+import { isRhodeIsland } from './check16_riSundayPremium';
 
 const TOLERANCE = 0.05;
 
@@ -77,9 +86,14 @@ function isPrWeeklyOt(t: string): boolean {
   return t === 'puerto rico weekly overtime' || t === 'puerto rico weekly ot' || t === 'pr weekly overtime' || t === 'pr weekly ot';
 }
 
+function isRiSundayPremium(t: string): boolean {
+  return t === 'ri sunday premium pay';
+}
+
 /** True if this is any recognized OT-row label (engine level — not in eligible/excluded config). */
 function isOtRowLabel(t: string): boolean {
-  return t === 'overtime' || isCaDailyOt(t) || isCaWeeklyOt(t) || isPrDailyOt(t) || isPrWeeklyOt(t);
+  return t === 'overtime' || isCaDailyOt(t) || isCaWeeklyOt(t)
+      || isPrDailyOt(t) || isPrWeeklyOt(t) || isRiSundayPremium(t);
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
@@ -94,6 +108,10 @@ function weekStartKey(d: Date): string {
 
 function toDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function isSunday(d: Date): boolean {
+  return d.getDay() === 0;
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────
@@ -194,21 +212,23 @@ export function check17OtMath(
     };
   }
 
-  // ── Non-CA/PR: weekly OT (40h threshold) ─────────────────────────────────────
+  // ── Non-CA/PR: weekly OT (40h threshold) with RI retail Sunday exclusion ──────
 
   type WeekAccum = {
     employeeName: string;
     state: string;
     weekKey: string;
     eligibleHrs: number;
+    sundayRiEligibleHrs: number;    // Pass 1: RI Sunday eligible hours (excluded from OT base)
     invoicedOtHrs: number;
+    invoicedRiPremHrs: number;      // Pass 2: hours from 'ri sunday premium pay' rows
     sourceRows: { sheet: string; rowNum: number }[];
   };
 
   const nonCaPrWeekMap = new Map<string, WeekAccum>();
   const nonCaPrWeekNumIndex = new Map<string, string>();
 
-  // Pass 1 — accumulate eligible hours.
+  // Pass 1 — accumulate eligible hours (and sundayRiEligibleHrs for RI associates).
   for (const r of allRows) {
     if (isDailyOtState(r.associateState)) continue;
     if (!r.visitDate) continue;
@@ -225,7 +245,9 @@ export function check17OtMath(
         state: r.associateState,
         weekKey: wk,
         eligibleHrs: 0,
+        sundayRiEligibleHrs: 0,
         invoicedOtHrs: 0,
+        invoicedRiPremHrs: 0,
         sourceRows: [],
       });
     }
@@ -233,17 +255,25 @@ export function check17OtMath(
     entry.eligibleHrs += r.timeHours;
     entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
 
+    // Accumulate RI Sunday eligible hours for retail exclusion.
+    if (isSunday(r.visitDate) && isRhodeIsland(r.associateState)) {
+      entry.sundayRiEligibleHrs += r.timeHours;
+    }
+
     if (r.week != null) {
       const numKey = `${r.employeeName.toLowerCase()}|${r.week}`;
       if (!nonCaPrWeekNumIndex.has(numKey)) nonCaPrWeekNumIndex.set(numKey, wk);
     }
   }
 
-  // Pass 2 — accumulate invoiced OT hours.
+  // Pass 2 — accumulate invoiced OT hours and RI Sunday premium hours.
   for (const r of allRows) {
     if (isDailyOtState(r.associateState)) continue;
     const t = normalizeType(r.comments);
-    if (t !== 'overtime') continue;
+
+    const isOtRow = t === 'overtime';
+    const isRiPremRow = isRiSundayPremium(t);
+    if (!isOtRow && !isRiPremRow) continue;
 
     let mapKey: string | null = null;
 
@@ -263,21 +293,35 @@ export function check17OtMath(
         state: r.associateState,
         weekKey: wk,
         eligibleHrs: 0,
+        sundayRiEligibleHrs: 0,
         invoicedOtHrs: 0,
+        invoicedRiPremHrs: 0,
         sourceRows: [],
       });
     }
     const entry = nonCaPrWeekMap.get(mapKey)!;
-    entry.invoicedOtHrs += r.timeHours;
+
+    if (isOtRow) {
+      // 'Overtime' rows accumulate into invoicedOtHrs (unchanged from v1).
+      entry.invoicedOtHrs += r.timeHours;
+    } else {
+      // 'RI Sunday Premium Pay' rows accumulate into invoicedRiPremHrs (NOT invoicedOtHrs).
+      entry.invoicedRiPremHrs += r.timeHours;
+    }
     entry.sourceRows.push({ sheet: r.sheet, rowNum: r.rowNum });
   }
 
   const nonCaPrFailures: Record<string, unknown>[] = [];
 
   for (const entry of nonCaPrWeekMap.values()) {
-    const expectedOt = entry.eligibleHrs > 40 ? entry.eligibleHrs - 40 : 0;
-    const diff = Math.abs(expectedOt - entry.invoicedOtHrs);
-    if (diff > TOLERANCE) {
+    // RI retail Sunday exclusion: Sunday hours are excluded from the OT base.
+    // For non-RI weeks sundayRiEligibleHrs = 0 → collapses to the existing check.
+    const otBase = entry.eligibleHrs - entry.sundayRiEligibleHrs;
+    const expectedOt = otBase > 40 ? otBase - 40 : 0;
+
+    // Assertion (a): invoiced OT must match expected OT on non-Sunday hours.
+    const otDiff = Math.abs(expectedOt - entry.invoicedOtHrs);
+    if (otDiff > TOLERANCE) {
       nonCaPrFailures.push({
         section: 'OT Math Validation — Non-CA/PR',
         employeeName: entry.employeeName,
@@ -287,12 +331,35 @@ export function check17OtMath(
         expectedOtHrs: parseFloat(expectedOt.toFixed(2)),
         invoicedOtHrs: parseFloat(entry.invoicedOtHrs.toFixed(2)),
         eligibleHrs: parseFloat(entry.eligibleHrs.toFixed(2)),
+        sundayRiEligibleHrs: parseFloat(entry.sundayRiEligibleHrs.toFixed(2)),
         issue: expectedOt === 0 && entry.invoicedOtHrs > 0
           ? 'OT row exists but no OT expected'
           : entry.invoicedOtHrs === 0 && expectedOt > 0
           ? 'Expected OT but no OT row found'
           : 'OT hours mismatch',
       });
+    }
+
+    // Assertion (b): RI Sunday premium hours must match Sunday eligible hours.
+    // Only fires when there are RI Sunday hours or invoiced RI premium rows.
+    if (entry.sundayRiEligibleHrs > 0 || entry.invoicedRiPremHrs > 0) {
+      const premDiff = Math.abs(entry.invoicedRiPremHrs - entry.sundayRiEligibleHrs);
+      if (premDiff > TOLERANCE) {
+        nonCaPrFailures.push({
+          section: 'OT Math Validation — RI Sunday Premium',
+          employeeName: entry.employeeName,
+          state: entry.state,
+          week: entry.weekKey,
+          location: formatLocation(entry.sourceRows),
+          sundayRiEligibleHrs: parseFloat(entry.sundayRiEligibleHrs.toFixed(2)),
+          invoicedRiPremHrs: parseFloat(entry.invoicedRiPremHrs.toFixed(2)),
+          issue: entry.invoicedRiPremHrs === 0 && entry.sundayRiEligibleHrs > 0
+            ? 'Expected RI Sunday premium hours but no premium row found'
+            : entry.invoicedRiPremHrs > 0 && entry.sundayRiEligibleHrs === 0
+            ? 'RI Sunday premium row exists but no Sunday eligible hours'
+            : 'RI Sunday premium hours mismatch',
+        });
+      }
     }
   }
 
