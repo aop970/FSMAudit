@@ -165,12 +165,18 @@ const tabRoster: RosterEntry[] = [
   { name: 'Merit Hyphen',  associateId: 'M0002I', type: 'FT', program: 'FSM I-Merit' },   // hyphen ↔ 'FSM I Merit' tab
   { name: 'Wrong Tab',     associateId: 'W0003I', type: 'FT', program: 'FSM II' },          // roster=II, billed on II Merit
   { name: 'Merit Two',     associateId: 'T0004I', type: 'FT', program: 'FSM II-Merit' },
+  // T-530: Salesforce Type 3 truncation — 'FSM I Merit'→'FSM I-M', 'FSM II Merit'→'FSM II-M'.
+  // These reps are correctly placed; normalizeSalesforceTruncation must resolve them so they DON'T false-flag.
+  { name: 'Trunc One',     associateId: 'U0005I', type: 'FT', program: 'FSM I-M' },
+  { name: 'Trunc Two',     associateId: 'U0006I', type: 'FT', program: 'FSM II-M' },
 ];
 const tabLabor: LaborRow[] = [
   makeRow({ associateId: 'C0001I', employeeName: 'Correct One',   sheet: 'FSM I',        comments: 'Work', timeHours: 8 }),
   makeRow({ associateId: 'M0002I', employeeName: 'Merit Hyphen',  sheet: 'FSM I Merit',  comments: 'Work', timeHours: 8 }),
   makeRow({ associateId: 'W0003I', employeeName: 'Wrong Tab',     sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // WRONG
   makeRow({ associateId: 'T0004I', employeeName: 'Merit Two',     sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }),
+  makeRow({ associateId: 'U0005I', employeeName: 'Trunc One',     sheet: 'FSM I Merit',  comments: 'Work', timeHours: 8 }), // T-530: truncated roster, correct tab
+  makeRow({ associateId: 'U0006I', employeeName: 'Trunc Two',     sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // T-530: truncated roster, correct tab
   makeRow({ associateId: 'NOROST', employeeName: 'Not On Roster', sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // skip (Check 8)
 ];
 const r19 = check19RosterTab(tabLabor, [], tabRoster);
@@ -182,6 +188,10 @@ assert('Check19 — hyphenated FSM I-Merit matches FSM I Merit tab (no false fla
   `M0002I was wrongly flagged`);
 assert('Check19 — not-on-roster ID skipped (Check 8 owns it)', !r19Ids.includes('NOROST'),
   `NOROST was wrongly flagged`);
+assert('Check19 — Salesforce-truncated FSM I-M matches FSM I Merit tab (no false flag) [T-530]',
+  !r19Ids.includes('U0005I'), `U0005I (FSM I-M) was wrongly flagged`);
+assert('Check19 — Salesforce-truncated FSM II-M matches FSM II Merit tab (no false flag) [T-530]',
+  !r19Ids.includes('U0006I'), `U0006I (FSM II-M) was wrongly flagged`);
 assert('Check19 — status fail when a misplacement exists', r19.status === 'fail',
   `got status=${r19.status}`);
 
