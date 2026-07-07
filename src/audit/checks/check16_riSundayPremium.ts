@@ -38,8 +38,15 @@ function toDateKey(d: Date): string {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const HOURS_TOLERANCE = 0.01;  // hours match tolerance
-const MU_TOLERANCE = 0.001;    // raw MU tolerance — do NOT cent-round MU
-const RATE_TOLERANCE = 0.01;   // cent tolerance for basePayRate
+// MU tolerance — buffered for invoice-side cent rounding of the premium base rate.
+// The invoice derives the premium row's MU from the CENT-ROUNDED half-rate
+// (basePayRate/2 rounded to the cent, e.g. 36.57/2 = 18.285 → 18.29), then applies
+// the markup — NOT from the exact half of base.muValue. So the premium MU inherits up
+// to (0.005 half-cent × markup) of rounding drift: 0.005 × 0.2993 (FT) ≈ 0.0015, which
+// exceeded the old ±0.001. 0.005 absorbs the worst-case half-cent×markup drift with
+// headroom while staying far tighter than any genuine wrong-rate error (off by dollars).
+const MU_TOLERANCE = 0.005;
+const RATE_TOLERANCE = 0.01;   // cent tolerance for basePayRate (half-rate rounds to the cent)
 
 // ── Main export ───────────────────────────────────────────────────────────────
 

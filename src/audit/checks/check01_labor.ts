@@ -87,6 +87,11 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
     // Accept both "...overtime" and "...ot" forms for PR OT labels.
     const isPRDailyOT  = commentLower === 'puerto rico daily overtime' || commentLower === 'puerto rico daily ot';
     const isPRWeeklyOT = commentLower === 'puerto rico weekly overtime' || commentLower === 'puerto rico weekly ot';
+    // RI Sunday Premium Pay rows intentionally carry HALF the configured base rate
+    // (basePayRate = base/2, rounded to the cent) — validated by Check 16, not here.
+    // Their bill/markup still follow the standard formula (and are checked below), but
+    // the configured-rate comparison would false-flag the half-rate against the full rate.
+    const isRiSundayPremium = commentLower === 'ri sunday premium pay';
     const isCA = /^ca$/i.test(r.associateState.trim()) || /california/i.test(r.associateState);
     const isPR = /^pr$/i.test(r.associateState.trim()) || /puerto rico/i.test(r.associateState);
 
@@ -113,7 +118,7 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
 
     // Hourly rate validation — only for non-OT rows (OT rows store full base rate in
     // the spreadsheet but bill at the OT rate, so the rate check is skipped for them).
-    const rateOk = expectedRate === 0 || r.basePayRate === 0 || isAnyOT
+    const rateOk = expectedRate === 0 || r.basePayRate === 0 || isAnyOT || isRiSundayPremium
       ? true
       : Math.abs(r.basePayRate - expectedRate) <= dollarTol;
 

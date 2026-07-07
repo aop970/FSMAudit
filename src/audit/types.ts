@@ -69,7 +69,8 @@ export interface CloudRow {
 export interface RosterEntry {
   name: string;
   associateId: string;
-  type: string;   // FSM I | FSM I Merit | FSM II | FSM II Merit
+  type: string;      // Col D "Type" — employment type (FT | PT)
+  program: string;   // Col E "Type 3" — program/tab assignment (FSM I | FSM I-Merit | FSM II | FSM II-Merit)
 }
 
 export interface ShiftRow {

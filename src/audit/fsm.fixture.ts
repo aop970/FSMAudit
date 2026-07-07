@@ -18,9 +18,11 @@ const store: Record<string, string> = {};
 
 // ── Now safe to import audit modules ──────────────────────────────────────────
 
+import { check01Labor } from './checks/check01_labor.js';
 import { check16RiSundayPremium } from './checks/check16_riSundayPremium.js';
 import { check17OtMath } from './checks/check17_otMath.js';
-import type { LaborRow } from './types.js';
+import { check19RosterTab } from './checks/check19_rosterTab.js';
+import type { LaborRow, RosterEntry } from './types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,7 +67,11 @@ function assert(label: string, condition: boolean, detail?: string): void {
 // Source: decision log DL-2026-0706b-ri-sunday-retail-exclusion (pka.db note 41)
 // Ground truth: 42.97 total eligible hours, 10.79 Sunday RI hours, 0h OT, 10.79h premium.
 // associateState='RI' (real invoice value — isRhodeIsland() must handle 'ri').
-// Premium muValue = base.muValue / 2 = 10.945 / 2 = 5.4725 (raw, not cent-rounded).
+// REAL invoice values (RS1202C, 6/28/2026): the premium row is built from the
+// CENT-ROUNDED half-rate (36.57/2 = 18.285 → 18.29) with markup applied to that
+// rounded rate, so premium muValue = 18.29 × 0.2993 = 5.474197 — NOT exactly
+// base.muValue/2 (5.4727005). This exercises the half-cent×markup rounding drift
+// that the MU_TOLERANCE buffer absorbs (would have false-flagged at the old ±0.001).
 
 console.log('\n=== REAL_LABELED_CASE: Robert Selema (RS1202C, FSM26-W25-26, 2026-06-28) ===');
 
@@ -75,20 +81,22 @@ const mondayDate = new Date(2026, 5, 22); // June 22 2026 — Monday
 // Base rows: 4 Sunday eligible rows (0.52 + 7.87 + 2.00 + 0.40 = 10.79h Sunday)
 // Plus Mon–Sat rows to reach 42.97 total (42.97 − 10.79 = 32.18h non-Sunday)
 const robertBase: LaborRow[] = [
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Work',    timeHours: 0.52, basePayRate: 36.57, muValue: 10.945, rowNum: 10 }),
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Travel',  timeHours: 7.87, basePayRate: 36.57, muValue: 10.945, rowNum: 11 }),
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Meeting', timeHours: 2.00, basePayRate: 36.57, muValue: 10.945, rowNum: 12 }),
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Travel',  timeHours: 0.40, basePayRate: 36.57, muValue: 10.945, rowNum: 13 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Work',    timeHours: 0.52, basePayRate: 36.57, muValue: 10.945401, rowNum: 10 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Travel',  timeHours: 7.87, basePayRate: 36.57, muValue: 10.945401, rowNum: 11 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Meeting', timeHours: 2.00, basePayRate: 36.57, muValue: 10.945401, rowNum: 12 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'Travel',  timeHours: 0.40, basePayRate: 36.57, muValue: 10.945401, rowNum: 13 }),
   // Non-Sunday rows (Mon–Sat) totaling 32.18h — does not trigger OT (32.18 < 40)
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: mondayDate, comments: 'Work',    timeHours: 32.18, basePayRate: 36.57, muValue: 10.945, rowNum: 14 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: mondayDate, comments: 'Work',    timeHours: 32.18, basePayRate: 36.57, muValue: 10.945401, rowNum: 14 }),
 ];
 
-// Matching premium rows: same hours, 'RI Sunday Premium Pay', basePayRate=18.285 (≈36.57/2), muValue=5.4725 (10.945/2 raw)
+// Matching premium rows — REAL invoice values: 'RI Sunday Premium Pay', basePayRate=18.29
+// (36.57/2 = 18.285 cent-rounded up), muValue=5.474197 (18.29 × 0.2993, markup on the
+// rounded rate — NOT 10.945401/2 = 5.4727005). Exercises the MU_TOLERANCE rounding buffer.
 const robertPremium: LaborRow[] = [
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 0.52, basePayRate: 18.285, muValue: 5.4725, rowNum: 20 }),
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 7.87, basePayRate: 18.285, muValue: 5.4725, rowNum: 21 }),
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 2.00, basePayRate: 18.285, muValue: 5.4725, rowNum: 22 }),
-  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 0.40, basePayRate: 18.285, muValue: 5.4725, rowNum: 23 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 0.52, basePayRate: 18.29, muValue: 5.474197, rowNum: 20 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 7.87, basePayRate: 18.29, muValue: 5.474197, rowNum: 21 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 2.00, basePayRate: 18.29, muValue: 5.474197, rowNum: 22 }),
+  makeRow({ associateId: 'RS1202C', employeeName: 'Robert Selema', associateState: 'RI', visitDate: sundayDate, comments: 'RI Sunday Premium Pay', timeHours: 0.40, basePayRate: 18.29, muValue: 5.474197, rowNum: 23 }),
 ];
 
 const robertRows = [...robertBase, ...robertPremium];
@@ -131,6 +139,51 @@ const robertPremFailures = (r17robert.flaggedRows ?? []).filter(
 );
 assert('Robert — invoicedRiPremHrs ≈ sundayRiEligibleHrs (10.79)', robertPremFailures.length === 0,
   `got ${robertPremFailures.length} RI premium assertion failure(s) for Robert Selema`);
+
+// Check 1 regression: with FSM II Merit configured to 36.57, the RI Sunday Premium Pay
+// rows carry the half-rate (18.29) and previously false-flagged Check 1's configured-rate
+// check ("Base rate $18.29 does not match configured FSM II Merit rate $36.57"). They are
+// now excluded from the rate check (like Paid Holiday / Time Off / Termed PTO rows).
+localStorage.setItem('fsm-audit-rules', JSON.stringify({ hourlyRates: { fsmIIMerit: 36.57 } }));
+const r1robert = check01Labor([], robertRows);
+const robertRateFlags = (r1robert.flaggedRows ?? []).filter(
+  (row) => typeof (row as Record<string, unknown>).rateIssue === 'string',
+);
+localStorage.removeItem('fsm-audit-rules');
+assert('Robert — Check1 no RI-premium rate false-positive', robertRateFlags.length === 0,
+  `got ${robertRateFlags.length} rate flag(s): ${JSON.stringify(robertRateFlags.map((r) => (r as Record<string, unknown>).rateIssue))}`);
+
+
+// ── SYNTHETIC: Check 19 Roster Tab Placement ─────────────────────────────────
+// Matches labor Associate ID → FSM Roster Col F, compares labor tab to Col E program.
+// Roster's hyphenated 'FSM I-Merit' must match the 'FSM I Merit' tab (canonical compare).
+// IDs absent from the roster are skipped here (Check 8 owns "not on roster").
+console.log('\n=== SYNTHETIC: Check 19 Roster Tab Placement ===');
+
+const tabRoster: RosterEntry[] = [
+  { name: 'Correct One',   associateId: 'C0001I', type: 'FT', program: 'FSM I' },
+  { name: 'Merit Hyphen',  associateId: 'M0002I', type: 'FT', program: 'FSM I-Merit' },   // hyphen ↔ 'FSM I Merit' tab
+  { name: 'Wrong Tab',     associateId: 'W0003I', type: 'FT', program: 'FSM II' },          // roster=II, billed on II Merit
+  { name: 'Merit Two',     associateId: 'T0004I', type: 'FT', program: 'FSM II-Merit' },
+];
+const tabLabor: LaborRow[] = [
+  makeRow({ associateId: 'C0001I', employeeName: 'Correct One',   sheet: 'FSM I',        comments: 'Work', timeHours: 8 }),
+  makeRow({ associateId: 'M0002I', employeeName: 'Merit Hyphen',  sheet: 'FSM I Merit',  comments: 'Work', timeHours: 8 }),
+  makeRow({ associateId: 'W0003I', employeeName: 'Wrong Tab',     sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // WRONG
+  makeRow({ associateId: 'T0004I', employeeName: 'Merit Two',     sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }),
+  makeRow({ associateId: 'NOROST', employeeName: 'Not On Roster', sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // skip (Check 8)
+];
+const r19 = check19RosterTab(tabLabor, [], tabRoster);
+console.log(`  Check19 status=${r19.status} stats="${r19.stats}"`);
+const r19Ids = (r19.flaggedRows ?? []).map((f) => (f as Record<string, unknown>).associateId);
+assert('Check19 — flags exactly the one wrong-tab rep', r19.flaggedCount === 1 && r19Ids[0] === 'W0003I',
+  `got flaggedCount=${r19.flaggedCount}, ids=${JSON.stringify(r19Ids)}`);
+assert('Check19 — hyphenated FSM I-Merit matches FSM I Merit tab (no false flag)', !r19Ids.includes('M0002I'),
+  `M0002I was wrongly flagged`);
+assert('Check19 — not-on-roster ID skipped (Check 8 owns it)', !r19Ids.includes('NOROST'),
+  `NOROST was wrongly flagged`);
+assert('Check19 — status fail when a misplacement exists', r19.status === 'fail',
+  `got status=${r19.status}`);
 
 
 // ── SYNTHETIC: Missing premium row ──────────────────────────────────────────

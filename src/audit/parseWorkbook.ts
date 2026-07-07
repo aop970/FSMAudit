@@ -265,15 +265,19 @@ function parseRosterSheet(ws: XLSX.WorkSheet): RosterEntry[] {
   const cName = headers.findIndex((h) => h.includes('employee') && h.includes('name'));
   const cId   = headers.indexOf('associate id');
   if (cName < 0 || cId < 0) return [];
+  // Col D "Type" = employment type (FT/PT). "type" matches the D header before "type 3".
   const cTypeIdx = headers.findIndex((h) => h.includes('type'));
-  const cType = cTypeIdx >= 0 ? cTypeIdx : 4;
+  const cType = cTypeIdx >= 0 ? cTypeIdx : 3;
+  // Col E "Type 3" = program/tab assignment (FSM I / FSM I-Merit / FSM II / FSM II-Merit).
+  const cProgIdx = headers.findIndex((h) => h.replace(/\s+/g, '') === 'type3' || h.includes('type 3'));
+  const cProgram = cProgIdx >= 0 ? cProgIdx : 4;
   const out: RosterEntry[] = [];
   for (let i = 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
     const name = toStr(row[cName]);
     const id   = toStr(row[cId]);
     if (!name && !id) continue;
-    out.push({ name, associateId: id, type: toStr(row[cType]) });
+    out.push({ name, associateId: id, type: toStr(row[cType]), program: toStr(row[cProgram]) });
   }
   return out;
 }

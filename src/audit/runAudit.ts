@@ -21,6 +21,7 @@ import { check15CustomRules } from './checks/check15_customRules';
 import { check16RiSundayPremium } from './checks/check16_riSundayPremium';
 import { check17OtMath } from './checks/check17_otMath';
 import { check18Holidays } from './checks/check18_holidays';
+import { check19RosterTab } from './checks/check19_rosterTab';
 import { getAuditRules } from './auditRules';
 
 function fmtDate(d: Date): string {
@@ -67,6 +68,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check16RiSundayPremium(allFsmI, allFsmII),
     check17OtMath(allFsmI, allFsmII, 'fsm'),
     check18Holidays(allFsmI, allFsmII, 'fsm'),
+    check19RosterTab(allFsmI, allFsmII, parsed.rosterEntries),
   ];
 
   const period = parsed.declaredPeriod
