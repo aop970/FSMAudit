@@ -8,6 +8,11 @@
 // Program labels are compared canonically (lowercased, punctuation/space-stripped)
 // so the roster's hyphenated "FSM I-Merit" matches the tab label "FSM I Merit".
 //
+// Salesforce Type 3 field truncation: program names ending in "-M" are treated as
+// the Merit variant of the base program (e.g. "FSM I-M" → "FSM I Merit",
+// "FSM II-M" → "FSM II Merit"). This covers any program that hits the same
+// Salesforce character-limit truncation (Option B: general suffix rule).
+//
 // IDs on a labor tab that are absent from the roster are NOT flagged here — that is
 // Check 8's job (Roster Validation). This check only reports wrong-tab placements,
 // deduplicated to one flag per (associate, tab).
@@ -21,6 +26,14 @@ import { toStr } from '../../lib/num';
 // Roman numerals survive stripping, so 'fsmi' and 'fsmii' never collide (exact match only).
 function canon(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Salesforce truncates "FSM I Merit" → "FSM I-M" and "FSM II Merit" → "FSM II-M"
+// due to a Type 3 field character limit. Normalize any program ending in "-M"
+// (case-insensitive) to its full Merit form so the canonical lookup succeeds.
+// General suffix rule — applies to any base program (FSM I, FSM II, or others).
+function normalizeSalesforceTruncation(prog: string): string {
+  return /^(.+)-M$/i.test(prog) ? prog.replace(/-M$/i, ' Merit') : prog;
 }
 
 // Friendly tab name for a canonical program key (for the "expected tab" message).
@@ -53,7 +66,7 @@ export function check19RosterTab(
   for (const r of rosterEntries) {
     const id = toStr(r.associateId).toUpperCase();
     if (!id) continue;
-    const prog = toStr(r.program).trim();
+    const prog = normalizeSalesforceTruncation(toStr(r.program).trim());
     if (!prog) continue;
     if (!rosterById.has(id)) rosterById.set(id, new Set());
     rosterById.get(id)!.add(prog);
