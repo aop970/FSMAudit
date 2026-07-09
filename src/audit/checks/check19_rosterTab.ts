@@ -1,9 +1,29 @@
 // Check 19 — Roster Tab Placement
-// Verifies each associate is billed on the labor tab that matches their program
-// assignment on the FSM Roster tab. Matches labor "Associate ID" to FSM Roster
-// Column F (Associate ID), then compares the labor tab to FSM Roster Column E
-// ("Type 3" — the program): FSM I → FSM I tab, FSM I-Merit → FSM I Merit tab,
-// FSM II → FSM II tab, FSM II-Merit → FSM II Merit tab.
+//
+// Allan's rule, verbatim: "Regardless of the period the invoice covers, 1 person to
+// 1 tab for the entire period. On the Roster Tab, if Active then search for the
+// Associate ID, and that same ID should be on the tab that matches the Type 3.
+// So if ID 123456 is Active and Type 3 is FSM II-M, then rep 123456 must only be
+// on the FSM II Merit tab. It is that simple."
+//
+// Implementation (ID-centric, one flag per person, complete in one pass):
+//   1. Iterate ACTIVE roster rows (Col B "Status" === Active). For each Active
+//      associate ID, their Type 3 (Col E) says which tab they're allowed on.
+//   2. Build the set of tabs that ID actually appears on across ALL labor rows
+//      (all weeks, both FSM I and FSM II tabs, base + Merit) — built once, up front.
+//   3. If any of those tabs is NOT the required tab, flag the PERSON ONCE, listing
+//      every stray tab they were found on. An Active associate not billed at all
+//      this period is not checked (nothing to flag). An Active associate billed
+//      only on their required tab passes.
+//
+// This deliberately does NOT flag per-occurrence or per-(id,tab) pair. The prior
+// version iterated labor rows and deduped on `${id}|${tab}`, so a person who was
+// wrong on TWO tabs produced TWO separate flag rows for the same person, and
+// fixing one tab still left the other as a "new" flag on the next run — that's
+// why Allan saw flags dribble out across runs (72, then 17, then ~65) instead of
+// a single stable worklist. Iterating Active roster IDs once, and building the
+// complete stray-tab set per person before emitting a single flag, guarantees one
+// full worklist per run: fixing everyone once converges the check to zero.
 //
 // Program labels are compared canonically (lowercased, punctuation/space-stripped)
 // so the roster's hyphenated "FSM I-Merit" matches the tab label "FSM I Merit".
@@ -13,17 +33,11 @@
 // "FSM II-M" → "FSM II Merit"). This covers any program that hits the same
 // Salesforce character-limit truncation (Option B: general suffix rule).
 //
-// IDs on a labor tab that are absent from the roster are NOT flagged here — that is
-// Check 8's job (Roster Validation). This check only reports wrong-tab placements,
-// deduplicated to one flag per (associate, tab).
-//
-// Roster Status filter: the "expected tab" lookup is built from ACTIVE Type-3 rows
-// only (Col B "Status" === "Active", case-insensitive). The FSM Roster tab retains a
-// large volume of Inactive rows (turned-over associates); using their stale Type-3
-// value as "the correct tab" produces false wrong-tab flags whenever a person moves
-// or the roster wasn't cleaned up. A billed associate who exists on the roster but
-// has NO Active row is surfaced as a separate "not Active — manual verify" flag
-// instead of being silently skipped or wrongly judged against a stale program.
+// Billed-but-not-Active: an Associate ID that appears on a labor tab but has NO
+// Active roster row is surfaced as a distinct "manual verify" flag (one per
+// person, listing every tab they were billed on) — Allan wants this callout kept.
+// An ID entirely absent from the roster (no row at any status) is NOT flagged
+// here — that stays Check 8's (Roster Validation) job, to avoid double-flagging.
 
 import type { CheckResult, LaborRow, RosterEntry } from '../types';
 import { toStr } from '../../lib/num';
@@ -68,9 +82,11 @@ export function check19RosterTab(
     };
   }
 
-  // Roster: Associate ID (Col F) → set of program labels (Col E "Type 3"), ACTIVE rows only.
-  // A person listed under multiple active programs is valid on any of their tabs.
-  // Inactive rows do not define a "correct tab" — they're stale roster history.
+  // Roster: Active associate ID → set of program labels (Col E "Type 3").
+  // A person with more than one Active row (different Type 3 each) is allowed on
+  // any of those tabs — confirmed in real data this is essentially never the case
+  // (0 people observed with >1 Active row of differing programs), but we don't
+  // assume it.
   const rosterById = new Map<string, Set<string>>();
   // Every associate ID that appears anywhere on the roster, regardless of status —
   // used only to distinguish "on roster but not Active" from "absent" (Check 8's job).
@@ -87,55 +103,63 @@ export function check19RosterTab(
     rosterById.get(id)!.add(prog);
   }
 
-  const failures: Record<string, unknown>[] = [];
-  const notActiveFlags: Record<string, unknown>[] = [];
-  const seen = new Set<string>();          // dedupe key: `${id}|${tab}`
-  let checkedAssociates = 0;
-
+  // Labor: Associate ID → set of DISTINCT tabs they were actually billed on across
+  // ALL weeks and ALL four tabs (FSM I, FSM I Merit, FSM II, FSM II Merit) — built
+  // once, up front, so the per-person check below sees the complete picture and
+  // can emit one complete flag instead of one flag per occurrence.
+  const tabsByAssociate = new Map<string, Set<string>>();
+  const nameByAssociate = new Map<string, string>();
   for (const r of [...fsmI, ...fsmII]) {
     const id = toStr(r.associateId).toUpperCase();
     const tab = toStr(r.sheet).trim();
     if (!id || !tab) continue;
+    if (!tabsByAssociate.has(id)) tabsByAssociate.set(id, new Set());
+    tabsByAssociate.get(id)!.add(tab);
+    if (!nameByAssociate.has(id)) nameByAssociate.set(id, r.employeeName);
+  }
 
-    const dedupeKey = `${id}|${canon(tab)}`;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
+  const failures: Record<string, unknown>[] = [];
+  const notActiveFlags: Record<string, unknown>[] = [];
+  let billedActiveCount = 0;
 
-    const rosterPrograms = rosterById.get(id);
-    if (!rosterPrograms || rosterPrograms.size === 0) {
-      // Not Active on the roster. If they're on the roster at all (Inactive-only),
-      // that's a distinct, surfaced callout — not a silent skip. If they're absent
-      // entirely, Check 8 (Roster Validation) owns it — skip here to avoid double-flagging.
-      if (rosterAnyStatusIds.has(id)) {
-        // Same key shape as the wrong-tab failures below (name/associateId/actualTab/
-        // rosterProgram/expectedTab/issue) so the flagged-rows table renders a single
-        // consistent column set — the "issue" text is what visually distinguishes
-        // this manual-verify category from a wrong-tab failure.
-        notActiveFlags.push({
-          name: r.employeeName,
-          associateId: id,
-          actualTab: tab,
-          rosterProgram: '(not Active)',
-          expectedTab: '(not Active)',
-          issue: `On "${tab}" tab and billed, but not Active on FSM Roster — manual verify`,
-        });
-      }
-      continue;
-    }
-    checkedAssociates++;
+  // Pass 1 — one flag per Active associate, listing every stray tab at once.
+  for (const [id, rosterPrograms] of rosterById) {
+    const actualTabs = tabsByAssociate.get(id);
+    if (!actualTabs || actualTabs.size === 0) continue; // not billed this period — nothing to check
+    billedActiveCount++;
 
-    const tabCanon = canon(tab);
     const rosterCanons = new Set(Array.from(rosterPrograms, canon));
-    if (rosterCanons.has(tabCanon)) continue; // correct tab
+    const strayTabs = Array.from(actualTabs).filter((tab) => !rosterCanons.has(canon(tab)));
+    if (strayTabs.length === 0) continue; // billed only on required tab(s) — pass
 
     const expectedTabs = Array.from(rosterCanons, (c) => CANON_TO_TAB[c] ?? '(unknown)');
+    const name = nameByAssociate.get(id) ?? '';
+    const rosterProgramLabel = Array.from(rosterPrograms).join(', ');
     failures.push({
-      name: r.employeeName,
+      name,
       associateId: id,
-      actualTab: tab,
-      rosterProgram: Array.from(rosterPrograms).join(', '),
+      rosterProgram: rosterProgramLabel,
       expectedTab: expectedTabs.join(', '),
-      issue: `On "${tab}" tab but FSM Roster lists program "${Array.from(rosterPrograms).join(', ')}" → expected "${expectedTabs.join(', ')}" tab`,
+      actualTab: Array.from(actualTabs).join(', '),
+      strayTabs: strayTabs.join(', '),
+      issue: `${id} (${name}) — Type 3 '${rosterProgramLabel}' requires ${expectedTabs.join(', ')} tab only, but billed on: ${strayTabs.join(', ')}`,
+    });
+  }
+
+  // Pass 2 — billed but no Active roster row at all (manual verify), one flag per person.
+  // Skip anyone entirely absent from the roster (no row at any status) — that's Check 8's job.
+  for (const [id, actualTabs] of tabsByAssociate) {
+    if (rosterById.has(id)) continue; // has an Active row — handled in pass 1
+    if (!rosterAnyStatusIds.has(id)) continue; // absent from roster entirely — Check 8 owns it
+    const name = nameByAssociate.get(id) ?? '';
+    const tabsLabel = Array.from(actualTabs).join(', ');
+    notActiveFlags.push({
+      name,
+      associateId: id,
+      actualTab: tabsLabel,
+      rosterProgram: '(not Active)',
+      expectedTab: '(not Active)',
+      issue: `${id} (${name}) — billed on ${tabsLabel} but not Active on FSM Roster — manual verify`,
     });
   }
 
@@ -145,7 +169,7 @@ export function check19RosterTab(
     checkId: 19,
     checkName: 'Roster Tab Placement',
     status: pass ? 'pass' : 'fail',
-    stats: `${checkedAssociates} active associate-tab placements checked against FSM Roster, ${failures.length} on wrong tab, ${notActiveFlags.length} billed but not Active on roster`,
+    stats: `${billedActiveCount} active associates billed checked, ${failures.length} on the wrong tab, ${notActiveFlags.length} billed but not Active`,
     flaggedCount: allFlags.length,
     flaggedRows: allFlags.slice(0, 200),
   };

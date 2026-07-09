@@ -154,8 +154,11 @@ assert('Robert — Check1 no RI-premium rate false-positive', robertRateFlags.le
   `got ${robertRateFlags.length} rate flag(s): ${JSON.stringify(robertRateFlags.map((r) => (r as Record<string, unknown>).rateIssue))}`);
 
 
-// ── SYNTHETIC: Check 19 Roster Tab Placement ─────────────────────────────────
-// Matches labor Associate ID → FSM Roster Col F, compares labor tab to Col E program.
+// ── SYNTHETIC: Check 19 Roster Tab Placement (T-539 rewrite) ────────────────
+// Allan's rule: 1 person, 1 tab. Iterate Active roster IDs; each ID's Type 3
+// (Col E) says the one tab they may appear on; build the FULL set of tabs they
+// were actually billed on across all weeks/tabs; flag the PERSON ONCE if any
+// tab isn't the required one, listing every stray tab together.
 // Roster's hyphenated 'FSM I-Merit' must match the 'FSM I Merit' tab (canonical compare).
 // IDs absent from the roster are skipped here (Check 8 owns "not on roster").
 console.log('\n=== SYNTHETIC: Check 19 Roster Tab Placement ===');
@@ -177,6 +180,14 @@ const tabRoster: RosterEntry[] = [
   // (current, correct program) — the Active row must win.
   { name: 'Rehired Mixed', associateId: 'I0008I', type: 'FT', program: 'FSM I',  status: 'Inactive' },
   { name: 'Rehired Mixed', associateId: 'I0008I', type: 'FT', program: 'FSM II', status: 'Active' },
+  // T-539: Dual Tab — Active on FSM I, billed on FSM I (correct) AND FSM II (stray).
+  // Must produce EXACTLY ONE flag for this person, listing only the stray tab (FSM II) —
+  // proves the rewrite doesn't double-count or treat the correct-tab row as an issue.
+  { name: 'Dual Tab', associateId: 'D0009I', type: 'FT', program: 'FSM I', status: 'Active' },
+  // T-539: Triple Stray — Active on FSM I, but billed only on FSM II AND FSM II Merit
+  // (never on FSM I at all). Must produce EXACTLY ONE flag listing BOTH stray tabs —
+  // proves the old per-occurrence dribble (one flag per stray tab) is gone.
+  { name: 'Triple Stray', associateId: 'E0010I', type: 'FT', program: 'FSM I', status: 'Active' },
 ];
 const tabLabor: LaborRow[] = [
   makeRow({ associateId: 'C0001I', employeeName: 'Correct One',   sheet: 'FSM I',        comments: 'Work', timeHours: 8 }),
@@ -188,6 +199,10 @@ const tabLabor: LaborRow[] = [
   makeRow({ associateId: 'NOROST', employeeName: 'Not On Roster', sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // skip (Check 8)
   makeRow({ associateId: 'I0007I', employeeName: 'Stale Inactive', sheet: 'FSM II',      comments: 'Work', timeHours: 8 }), // T-531: Inactive-only → manual-verify, NOT wrong-tab
   makeRow({ associateId: 'I0008I', employeeName: 'Rehired Mixed',  sheet: 'FSM II',      comments: 'Work', timeHours: 8 }), // T-531: Active row (FSM II) matches billed tab → PASS
+  makeRow({ associateId: 'D0009I', employeeName: 'Dual Tab',      sheet: 'FSM I',        comments: 'Work', timeHours: 8 }), // T-539: correct-tab row
+  makeRow({ associateId: 'D0009I', employeeName: 'Dual Tab',      sheet: 'FSM II',       comments: 'Work', timeHours: 4 }), // T-539: stray-tab row
+  makeRow({ associateId: 'E0010I', employeeName: 'Triple Stray',  sheet: 'FSM II',       comments: 'Work', timeHours: 4 }), // T-539: stray tab #1
+  makeRow({ associateId: 'E0010I', employeeName: 'Triple Stray',  sheet: 'FSM II Merit', comments: 'Work', timeHours: 4 }), // T-539: stray tab #2
 ];
 const r19 = check19RosterTab(tabLabor, [], tabRoster);
 console.log(`  Check19 status=${r19.status} stats="${r19.stats}"`);
@@ -196,7 +211,8 @@ const r19Ids = r19Rows.map((f) => f.associateId);
 const wrongTabRows = r19Rows.filter((f) => !String(f.issue).includes('manual verify'));
 const notActiveRows = r19Rows.filter((f) => String(f.issue).includes('manual verify'));
 
-assert('Check19 — flags exactly the one wrong-tab rep', wrongTabRows.length === 1 && wrongTabRows[0].associateId === 'W0003I',
+assert('Check19 — flags exactly the three wrong-tab reps (one row each, no duplicates)',
+  wrongTabRows.length === 3 && ['W0003I', 'D0009I', 'E0010I'].every((id) => wrongTabRows.some((r) => r.associateId === id)),
   `got wrongTabRows=${JSON.stringify(wrongTabRows.map((r) => r.associateId))}`);
 assert('Check19 — hyphenated FSM I-Merit matches FSM I Merit tab (no false flag)', !r19Ids.includes('M0002I'),
   `M0002I was wrongly flagged`);
@@ -221,6 +237,24 @@ assert('Check19 — Inactive-only billed associate produces exactly one "not Act
 assert('Check19 — Active row wins over a stale Inactive row for the same ID (no false flag either way) [T-531]',
   !r19Ids.includes('I0008I'),
   `I0008I (Rehired Mixed) was wrongly flagged`);
+
+// T-539: ONE flag per person, even when billed on their correct tab PLUS a stray tab —
+// the flag must list only the stray tab, not the correct one.
+const dualTabFlags = wrongTabRows.filter((r) => r.associateId === 'D0009I');
+assert('Check19 — Dual Tab produces exactly ONE flag (not one per tab) [T-539]',
+  dualTabFlags.length === 1, `got ${dualTabFlags.length} flags for D0009I`);
+assert('Check19 — Dual Tab flag lists only the stray tab (FSM II), not the correct FSM I tab [T-539]',
+  dualTabFlags.length === 1 && String(dualTabFlags[0].strayTabs) === 'FSM II',
+  `got strayTabs=${JSON.stringify(dualTabFlags[0]?.strayTabs)}`);
+
+// T-539: ONE flag per person even with TWO stray tabs — both must be listed together,
+// proving the old per-occurrence dribble (separate flags per stray tab) is fixed.
+const tripleStrayFlags = wrongTabRows.filter((r) => r.associateId === 'E0010I');
+assert('Check19 — Triple Stray produces exactly ONE flag covering BOTH stray tabs [T-539]',
+  tripleStrayFlags.length === 1
+    && String(tripleStrayFlags[0].strayTabs).includes('FSM II')
+    && String(tripleStrayFlags[0].strayTabs).includes('FSM II Merit'),
+  `got ${tripleStrayFlags.length} flag(s), strayTabs=${JSON.stringify(tripleStrayFlags[0]?.strayTabs)}`);
 
 
 // ── SYNTHETIC: Missing premium row ──────────────────────────────────────────
