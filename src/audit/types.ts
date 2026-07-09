@@ -71,6 +71,7 @@ export interface RosterEntry {
   associateId: string;
   type: string;      // Col D "Type" — employment type (FT | PT)
   program: string;   // Col E "Type 3" — program/tab assignment (FSM I | FSM I-Merit | FSM II | FSM II-Merit)
+  status: string;    // Col B "Status" — roster status (Active | Inactive)
 }
 
 export interface ShiftRow {

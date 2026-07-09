@@ -161,14 +161,22 @@ assert('Robert — Check1 no RI-premium rate false-positive', robertRateFlags.le
 console.log('\n=== SYNTHETIC: Check 19 Roster Tab Placement ===');
 
 const tabRoster: RosterEntry[] = [
-  { name: 'Correct One',   associateId: 'C0001I', type: 'FT', program: 'FSM I' },
-  { name: 'Merit Hyphen',  associateId: 'M0002I', type: 'FT', program: 'FSM I-Merit' },   // hyphen ↔ 'FSM I Merit' tab
-  { name: 'Wrong Tab',     associateId: 'W0003I', type: 'FT', program: 'FSM II' },          // roster=II, billed on II Merit
-  { name: 'Merit Two',     associateId: 'T0004I', type: 'FT', program: 'FSM II-Merit' },
+  { name: 'Correct One',   associateId: 'C0001I', type: 'FT', program: 'FSM I',        status: 'Active' },
+  { name: 'Merit Hyphen',  associateId: 'M0002I', type: 'FT', program: 'FSM I-Merit',  status: 'Active' },   // hyphen ↔ 'FSM I Merit' tab
+  { name: 'Wrong Tab',     associateId: 'W0003I', type: 'FT', program: 'FSM II',       status: 'Active' },     // roster=II, billed on II Merit
+  { name: 'Merit Two',     associateId: 'T0004I', type: 'FT', program: 'FSM II-Merit', status: 'Active' },
   // T-530: Salesforce Type 3 truncation — 'FSM I Merit'→'FSM I-M', 'FSM II Merit'→'FSM II-M'.
   // These reps are correctly placed; normalizeSalesforceTruncation must resolve them so they DON'T false-flag.
-  { name: 'Trunc One',     associateId: 'U0005I', type: 'FT', program: 'FSM I-M' },
-  { name: 'Trunc Two',     associateId: 'U0006I', type: 'FT', program: 'FSM II-M' },
+  { name: 'Trunc One',     associateId: 'U0005I', type: 'FT', program: 'FSM I-M',  status: 'Active' },
+  { name: 'Trunc Two',     associateId: 'U0006I', type: 'FT', program: 'FSM II-M', status: 'Active' },
+  // T-531: Inactive-only roster rows. 'Stale Inactive' has ONLY an Inactive row on the
+  // roster with a program that would mismatch the labor tab if (wrongly) treated as
+  // authoritative — proves Inactive rows no longer drive the "expected tab" lookup.
+  { name: 'Stale Inactive', associateId: 'I0007I', type: 'FT', program: 'FSM I', status: 'Inactive' },
+  // 'Rehired Mixed' has BOTH an Inactive row (stale, wrong program) and an Active row
+  // (current, correct program) — the Active row must win.
+  { name: 'Rehired Mixed', associateId: 'I0008I', type: 'FT', program: 'FSM I',  status: 'Inactive' },
+  { name: 'Rehired Mixed', associateId: 'I0008I', type: 'FT', program: 'FSM II', status: 'Active' },
 ];
 const tabLabor: LaborRow[] = [
   makeRow({ associateId: 'C0001I', employeeName: 'Correct One',   sheet: 'FSM I',        comments: 'Work', timeHours: 8 }),
@@ -178,12 +186,18 @@ const tabLabor: LaborRow[] = [
   makeRow({ associateId: 'U0005I', employeeName: 'Trunc One',     sheet: 'FSM I Merit',  comments: 'Work', timeHours: 8 }), // T-530: truncated roster, correct tab
   makeRow({ associateId: 'U0006I', employeeName: 'Trunc Two',     sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // T-530: truncated roster, correct tab
   makeRow({ associateId: 'NOROST', employeeName: 'Not On Roster', sheet: 'FSM II Merit', comments: 'Work', timeHours: 8 }), // skip (Check 8)
+  makeRow({ associateId: 'I0007I', employeeName: 'Stale Inactive', sheet: 'FSM II',      comments: 'Work', timeHours: 8 }), // T-531: Inactive-only → manual-verify, NOT wrong-tab
+  makeRow({ associateId: 'I0008I', employeeName: 'Rehired Mixed',  sheet: 'FSM II',      comments: 'Work', timeHours: 8 }), // T-531: Active row (FSM II) matches billed tab → PASS
 ];
 const r19 = check19RosterTab(tabLabor, [], tabRoster);
 console.log(`  Check19 status=${r19.status} stats="${r19.stats}"`);
-const r19Ids = (r19.flaggedRows ?? []).map((f) => (f as Record<string, unknown>).associateId);
-assert('Check19 — flags exactly the one wrong-tab rep', r19.flaggedCount === 1 && r19Ids[0] === 'W0003I',
-  `got flaggedCount=${r19.flaggedCount}, ids=${JSON.stringify(r19Ids)}`);
+const r19Rows = (r19.flaggedRows ?? []) as Record<string, unknown>[];
+const r19Ids = r19Rows.map((f) => f.associateId);
+const wrongTabRows = r19Rows.filter((f) => !String(f.issue).includes('manual verify'));
+const notActiveRows = r19Rows.filter((f) => String(f.issue).includes('manual verify'));
+
+assert('Check19 — flags exactly the one wrong-tab rep', wrongTabRows.length === 1 && wrongTabRows[0].associateId === 'W0003I',
+  `got wrongTabRows=${JSON.stringify(wrongTabRows.map((r) => r.associateId))}`);
 assert('Check19 — hyphenated FSM I-Merit matches FSM I Merit tab (no false flag)', !r19Ids.includes('M0002I'),
   `M0002I was wrongly flagged`);
 assert('Check19 — not-on-roster ID skipped (Check 8 owns it)', !r19Ids.includes('NOROST'),
@@ -194,6 +208,19 @@ assert('Check19 — Salesforce-truncated FSM II-M matches FSM II Merit tab (no f
   !r19Ids.includes('U0006I'), `U0006I (FSM II-M) was wrongly flagged`);
 assert('Check19 — status fail when a misplacement exists', r19.status === 'fail',
   `got status=${r19.status}`);
+
+// T-531: Inactive roster rows must not drive wrong-tab flags.
+assert('Check19 — Inactive-only roster row does NOT produce a wrong-tab flag [T-531]',
+  !wrongTabRows.some((r) => r.associateId === 'I0007I'),
+  `I0007I (Stale Inactive) was wrongly flagged as wrong-tab`);
+// T-531: billed Inactive-only associate produces exactly one "not Active" manual-verify flag.
+assert('Check19 — Inactive-only billed associate produces exactly one "not Active — manual verify" flag [T-531]',
+  notActiveRows.length === 1 && notActiveRows[0].associateId === 'I0007I',
+  `got notActiveRows=${JSON.stringify(notActiveRows.map((r) => r.associateId))}`);
+// T-531: an Inactive row alongside a matching Active row must not false-flag either way.
+assert('Check19 — Active row wins over a stale Inactive row for the same ID (no false flag either way) [T-531]',
+  !r19Ids.includes('I0008I'),
+  `I0008I (Rehired Mixed) was wrongly flagged`);
 
 
 // ── SYNTHETIC: Missing premium row ──────────────────────────────────────────

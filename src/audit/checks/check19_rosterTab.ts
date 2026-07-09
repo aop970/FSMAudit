@@ -16,6 +16,14 @@
 // IDs on a labor tab that are absent from the roster are NOT flagged here — that is
 // Check 8's job (Roster Validation). This check only reports wrong-tab placements,
 // deduplicated to one flag per (associate, tab).
+//
+// Roster Status filter: the "expected tab" lookup is built from ACTIVE Type-3 rows
+// only (Col B "Status" === "Active", case-insensitive). The FSM Roster tab retains a
+// large volume of Inactive rows (turned-over associates); using their stale Type-3
+// value as "the correct tab" produces false wrong-tab flags whenever a person moves
+// or the roster wasn't cleaned up. A billed associate who exists on the roster but
+// has NO Active row is surfaced as a separate "not Active — manual verify" flag
+// instead of being silently skipped or wrongly judged against a stale program.
 
 import type { CheckResult, LaborRow, RosterEntry } from '../types';
 import { toStr } from '../../lib/num';
@@ -60,12 +68,19 @@ export function check19RosterTab(
     };
   }
 
-  // Roster: Associate ID (Col F) → set of program labels (Col E "Type 3").
-  // A person listed under multiple programs is valid on any of their tabs.
+  // Roster: Associate ID (Col F) → set of program labels (Col E "Type 3"), ACTIVE rows only.
+  // A person listed under multiple active programs is valid on any of their tabs.
+  // Inactive rows do not define a "correct tab" — they're stale roster history.
   const rosterById = new Map<string, Set<string>>();
+  // Every associate ID that appears anywhere on the roster, regardless of status —
+  // used only to distinguish "on roster but not Active" from "absent" (Check 8's job).
+  const rosterAnyStatusIds = new Set<string>();
   for (const r of rosterEntries) {
     const id = toStr(r.associateId).toUpperCase();
     if (!id) continue;
+    rosterAnyStatusIds.add(id);
+    const isActive = toStr(r.status).trim().toLowerCase() === 'active';
+    if (!isActive) continue;
     const prog = normalizeSalesforceTruncation(toStr(r.program).trim());
     if (!prog) continue;
     if (!rosterById.has(id)) rosterById.set(id, new Set());
@@ -73,6 +88,7 @@ export function check19RosterTab(
   }
 
   const failures: Record<string, unknown>[] = [];
+  const notActiveFlags: Record<string, unknown>[] = [];
   const seen = new Set<string>();          // dedupe key: `${id}|${tab}`
   let checkedAssociates = 0;
 
@@ -86,7 +102,26 @@ export function check19RosterTab(
     seen.add(dedupeKey);
 
     const rosterPrograms = rosterById.get(id);
-    if (!rosterPrograms || rosterPrograms.size === 0) continue; // not on roster → Check 8 owns it
+    if (!rosterPrograms || rosterPrograms.size === 0) {
+      // Not Active on the roster. If they're on the roster at all (Inactive-only),
+      // that's a distinct, surfaced callout — not a silent skip. If they're absent
+      // entirely, Check 8 (Roster Validation) owns it — skip here to avoid double-flagging.
+      if (rosterAnyStatusIds.has(id)) {
+        // Same key shape as the wrong-tab failures below (name/associateId/actualTab/
+        // rosterProgram/expectedTab/issue) so the flagged-rows table renders a single
+        // consistent column set — the "issue" text is what visually distinguishes
+        // this manual-verify category from a wrong-tab failure.
+        notActiveFlags.push({
+          name: r.employeeName,
+          associateId: id,
+          actualTab: tab,
+          rosterProgram: '(not Active)',
+          expectedTab: '(not Active)',
+          issue: `On "${tab}" tab and billed, but not Active on FSM Roster — manual verify`,
+        });
+      }
+      continue;
+    }
     checkedAssociates++;
 
     const tabCanon = canon(tab);
@@ -104,13 +139,14 @@ export function check19RosterTab(
     });
   }
 
-  const pass = failures.length === 0;
+  const allFlags = [...failures, ...notActiveFlags];
+  const pass = allFlags.length === 0;
   return {
     checkId: 19,
     checkName: 'Roster Tab Placement',
     status: pass ? 'pass' : 'fail',
-    stats: `${checkedAssociates} associate-tab placements checked against FSM Roster, ${failures.length} on wrong tab`,
-    flaggedCount: failures.length,
-    flaggedRows: failures.slice(0, 200),
+    stats: `${checkedAssociates} active associate-tab placements checked against FSM Roster, ${failures.length} on wrong tab, ${notActiveFlags.length} billed but not Active on roster`,
+    flaggedCount: allFlags.length,
+    flaggedRows: allFlags.slice(0, 200),
   };
 }
