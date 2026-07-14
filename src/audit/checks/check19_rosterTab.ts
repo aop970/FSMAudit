@@ -107,7 +107,11 @@ export function check19RosterTab(
   // ALL weeks and ALL four tabs (FSM I, FSM I Merit, FSM II, FSM II Merit) — built
   // once, up front, so the per-person check below sees the complete picture and
   // can emit one complete flag instead of one flag per occurrence.
+  // rowCountByAssociateTab tracks how many rows each person has per tab so the fix
+  // message can say "Delete 47 rows from FSM II Merit" rather than leaving the user
+  // to guess how many rows to find and remove.
   const tabsByAssociate = new Map<string, Set<string>>();
+  const rowCountByAssociateTab = new Map<string, Map<string, number>>();
   const nameByAssociate = new Map<string, string>();
   for (const r of [...fsmI, ...fsmII]) {
     const id = toStr(r.associateId).toUpperCase();
@@ -115,6 +119,9 @@ export function check19RosterTab(
     if (!id || !tab) continue;
     if (!tabsByAssociate.has(id)) tabsByAssociate.set(id, new Set());
     tabsByAssociate.get(id)!.add(tab);
+    if (!rowCountByAssociateTab.has(id)) rowCountByAssociateTab.set(id, new Map());
+    const tabCounts = rowCountByAssociateTab.get(id)!;
+    tabCounts.set(tab, (tabCounts.get(tab) ?? 0) + 1);
     if (!nameByAssociate.has(id)) nameByAssociate.set(id, r.employeeName);
   }
 
@@ -135,6 +142,13 @@ export function check19RosterTab(
     const expectedTabs = Array.from(rosterCanons, (c) => CANON_TO_TAB[c] ?? '(unknown)');
     const name = nameByAssociate.get(id) ?? '';
     const rosterProgramLabel = Array.from(rosterPrograms).join(', ');
+    // Build per-stray-tab row counts so the fix message is unambiguous:
+    // "FIX: Delete their rows from — FSM II Merit (47 rows)" tells the user exactly
+    // what to remove. DO NOT move rows — only DELETE the stray ones. The person's
+    // rows on their correct tab stay untouched.
+    const tabCounts = rowCountByAssociateTab.get(id) ?? new Map<string, number>();
+    const strayTabDetails = strayTabs.map((tab) => `${tab} (${tabCounts.get(tab) ?? 0} rows)`);
+    const totalStrayRows = strayTabs.reduce((sum, tab) => sum + (tabCounts.get(tab) ?? 0), 0);
     failures.push({
       name,
       associateId: id,
@@ -142,7 +156,8 @@ export function check19RosterTab(
       expectedTab: expectedTabs.join(', '),
       actualTab: Array.from(actualTabs).join(', '),
       strayTabs: strayTabs.join(', '),
-      issue: `${id} (${name}) — Type 3 '${rosterProgramLabel}' requires ${expectedTabs.join(', ')} tab only, but billed on: ${strayTabs.join(', ')}`,
+      strayRowCount: totalStrayRows,
+      issue: `${id} (${name}) — Type 3 '${rosterProgramLabel}' requires ${expectedTabs.join(', ')} tab only. FIX: Delete their rows from — ${strayTabDetails.join('; ')}`,
     });
   }
 
