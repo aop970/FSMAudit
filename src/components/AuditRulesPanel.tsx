@@ -12,6 +12,7 @@ import {
   type RulesSyncStatus,
   DEFAULT_RULES,
   DEFAULT_SES_RULES,
+  DEFAULT_CI_RULES,
   getAuditRules,
   saveRulesSection,
   resetSection,
@@ -176,8 +177,9 @@ function MarkupRatesSection({ initial }: { initial: AuditRules['markupRates'] })
   }
 
   function handleReset() {
-    setFt(String(DEFAULT_RULES.markupRates.ft));
-    setPt(String(DEFAULT_RULES.markupRates.pt));
+    const defaults = prog === 'ses' ? DEFAULT_SES_RULES : prog === 'ci' ? DEFAULT_CI_RULES : DEFAULT_RULES;
+    setFt(String(defaults.markupRates.ft));
+    setPt(String(defaults.markupRates.pt));
     const ok = resetSection('markupRates', prog);
     triggerSave(ok);
   }

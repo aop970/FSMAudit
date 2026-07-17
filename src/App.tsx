@@ -915,7 +915,7 @@ export default function App() {
           className="fixed inset-y-0 right-0 z-50 shadow-2xl"
           style={{ top: 53 }}
         >
-          <AuditRulesPanel program={program} onClose={() => setRulesOpen(false)} />
+          <AuditRulesPanel key={program} program={program} onClose={() => setRulesOpen(false)} />
         </div>
       )}
 
