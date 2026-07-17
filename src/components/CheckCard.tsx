@@ -52,6 +52,8 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   const [ddState, setDdState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [ddOutput, setDdOutput] = useState('');
   const [ddError, setDdError] = useState('');
+  // Check 19: session-scoped per-row dismiss (resets automatically when component remounts on new upload)
+  const [dismissedCheck19, setDismissedCheck19] = useState<Set<string>>(new Set());
   const s = STATUS_STYLES[result.status];
 
   const showBragiButton = (result.status === 'fail' || result.status === 'warning') && apiKey.trim();
@@ -142,7 +144,77 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
       {open && (
         <div className="border-t px-5 py-4 space-y-4" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(7, 9, 15, 0.5)' }}>
           {/* Failure table */}
-          {result.flaggedRows.length === 0 ? (
+          {result.checkId === 19 ? (
+            // Check 19 — per-row dismiss (OK) buttons, session-scoped
+            (() => {
+              const allRows = result.flaggedRows.slice(0, 200);
+              const visibleRows = allRows.filter(
+                (row) => !dismissedCheck19.has(String(row['associateId'] ?? '')),
+              );
+              const dismissedCount = dismissedCheck19.size;
+              return (
+                <>
+                  {result.flaggedRows.length === 0 || visibleRows.length === 0 ? (
+                    <p className="text-xs text-mc-dim">
+                      {result.flaggedRows.length === 0
+                        ? 'No flagged rows for this check.'
+                        : 'All flagged rows acknowledged.'}
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--mc-card-border)' }}>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
+                            {Object.keys(result.flaggedRows[0]).map((k) => (
+                              <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                                {k}
+                              </th>
+                            ))}
+                            <th className="px-3 py-2" />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibleRows.map((row, i) => {
+                            const rowKey = String(row['associateId'] ?? i);
+                            return (
+                              <tr key={rowKey} className="border-b last:border-0 hover:bg-mc-blue/5" style={{ borderColor: 'var(--mc-card-border)' }}>
+                                {Object.entries(row).map(([k, v]) => (
+                                  <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
+                                    {String(v ?? '—')}
+                                  </td>
+                                ))}
+                                <td className="px-3 py-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDismissedCheck19((prev) => new Set(prev).add(rowKey))}
+                                    className="rounded px-2 py-0.5 text-[10px] font-medium transition"
+                                    style={{ border: '1px solid var(--mc-card-border)', color: 'var(--mc-dim)' }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.color = '#22d06b'; e.currentTarget.style.borderColor = 'rgba(34,208,107,0.4)'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--mc-dim)'; e.currentTarget.style.borderColor = 'var(--mc-card-border)'; }}
+                                    title="Acknowledge — hides this row for this session"
+                                  >
+                                    OK
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      {result.flaggedRows.length > 200 && (
+                        <p className="px-3 py-2 text-[10px] text-mc-dim">
+                          Showing 200 of {result.flaggedRows.length} rows
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {dismissedCount > 0 && (
+                    <p className="mt-1 text-[10px] text-mc-dim">{dismissedCount} acknowledged</p>
+                  )}
+                </>
+              );
+            })()
+          ) : result.flaggedRows.length === 0 ? (
             <p className="text-xs text-mc-dim">No flagged rows for this check.</p>
           ) : (
             <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--mc-card-border)' }}>
