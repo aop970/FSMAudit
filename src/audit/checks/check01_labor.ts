@@ -52,8 +52,11 @@ function resolveRates(
   };
 }
 
-// Billing tolerance: absorbs invoice-side cent rounding (up to ~$0.02/row observed).
-// $0.05 gives 2.5× headroom above the worst observed rounding gap without hiding real errors.
+// Billing tolerance: absorbs invoice-side cent rounding (safety margin after base-rate fix below).
+// Root cause of FSM II Merit false positives: source data stores base pay rates with sub-cent
+// precision (e.g. $18.285 = $36.57/2), but the invoice formula uses the 2-decimal displayed rate
+// ($18.29). This caused a systematic $0.06–$0.07 bill delta. Fix: effectiveBase is rounded to 2
+// decimal places so our computation matches the invoice. BILL_TOL=$0.05 is retained as a margin.
 // MU_TOL matches BILL_TOL: vendors sometimes truncate the per-unit markup (e.g. $8.62→$8.60)
 // before multiplying by hours. This produces a sub-$0.02 MU discrepancy that is cosmetic —
 // the bill total is still within BILL_TOL. Using a tight dollarTol on MU produced 165 false
@@ -100,7 +103,10 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
     const isAnyOT = isOverTime || isCADailyOT || isCAWeeklyOT || isPRDailyOT || isPRWeeklyOT; // used to skip rate check
 
     const { expectedRate, otRate } = resolveRates(r.sheet, rules);
-    const effectiveBase = (useOtBilling && otRate > 0) ? otRate : r.basePayRate;
+    // Round to 2 decimal places: source data may carry sub-cent precision (e.g. $18.285);
+    // the invoice formula uses the displayed 2-decimal rate. Rounding here matches that behaviour.
+    const rawBase = (useOtBilling && otRate > 0) ? otRate : r.basePayRate;
+    const effectiveBase = Math.round(rawBase * 100) / 100;
 
     const mu = type === 'FT'
       ? effectiveBase * ftRate
