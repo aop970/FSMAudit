@@ -144,7 +144,89 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
       {open && (
         <div className="border-t px-5 py-4 space-y-4" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(7, 9, 15, 0.5)' }}>
           {/* Failure table */}
-          {result.checkId === 19 ? (
+          {result.checkId === 7 ? (
+            // Check 7 — split blanket-approved entries from actionable unapproved OT
+            (() => {
+              const blanketRows = result.flaggedRows.filter((r) => r['section'] === 'blanketApproved');
+              const unapprovedRows = result.flaggedRows.filter((r) => r['section'] !== 'blanketApproved');
+              const totalBlanketHrs = blanketRows.reduce(
+                (sum, r) => sum + parseFloat(String(r['hours'] ?? '0')),
+                0,
+              );
+              const blanketNote = blanketRows.length > 0 ? String(blanketRows[0]['issue'] ?? '') : '';
+              return (
+                <div className="space-y-3">
+                  {/* Green summary bar for blanket-approved entries */}
+                  {blanketRows.length > 0 && (
+                    <div
+                      className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs"
+                      style={{
+                        backgroundColor: 'rgba(34, 208, 107, 0.08)',
+                        border: '1px solid rgba(34, 208, 107, 0.25)',
+                        color: '#22d06b',
+                      }}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                      <span className="font-medium">
+                        {blanketRows.length} {blanketRows.length === 1 ? 'entry' : 'entries'} covered by blanket approval
+                        {' · '}{totalBlanketHrs.toFixed(2)} hrs
+                        {blanketNote ? ` · ${blanketNote}` : ''}
+                      </span>
+                    </div>
+                  )}
+                  {/* Individual rows for unapproved OT entries (actionable) */}
+                  {unapprovedRows.length > 0 ? (
+                    <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--mc-card-border)' }}>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
+                            {Object.keys(unapprovedRows[0])
+                              .filter((k) => k !== 'severity')
+                              .map((k) => (
+                                <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                                  {k}
+                                </th>
+                              ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {unapprovedRows.slice(0, 200).map((row, i) => {
+                            const severity = row['severity'] as string | undefined;
+                            const rowStyle: React.CSSProperties = {
+                              borderColor: 'var(--mc-card-border)',
+                              ...(severity === 'red'
+                                ? { backgroundColor: 'rgba(239, 68, 68, 0.12)', borderLeft: '3px solid rgba(239, 68, 68, 0.7)' }
+                                : severity === 'orange'
+                                ? { backgroundColor: 'rgba(251, 146, 60, 0.12)', borderLeft: '3px solid rgba(251, 146, 60, 0.7)' }
+                                : {}),
+                            };
+                            return (
+                              <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={rowStyle}>
+                                {Object.entries(row)
+                                  .filter(([k]) => k !== 'severity')
+                                  .map(([k, v]) => (
+                                    <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
+                                      {String(v ?? '—')}
+                                    </td>
+                                  ))}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      {unapprovedRows.length > 200 && (
+                        <p className="px-3 py-2 text-[10px] text-mc-dim">
+                          Showing 200 of {unapprovedRows.length} rows
+                        </p>
+                      )}
+                    </div>
+                  ) : blanketRows.length === 0 ? (
+                    <p className="text-xs text-mc-dim">No flagged rows for this check.</p>
+                  ) : null}
+                </div>
+              );
+            })()
+          ) : result.checkId === 19 ? (
             // Check 19 — per-row dismiss (OK) buttons, session-scoped
             (() => {
               const allRows = result.flaggedRows.slice(0, 200);
@@ -221,41 +303,23 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
-                    {Object.keys(result.flaggedRows[0])
-                      .filter((k) => !(result.checkId === 7 && k === 'severity'))
-                      .map((k) => (
-                        <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
-                          {k}
-                        </th>
-                      ))}
+                    {Object.keys(result.flaggedRows[0]).map((k) => (
+                      <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                        {k}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {result.flaggedRows.slice(0, 200).map((row, i) => {
-                    // Check 7: apply row tint based on severity field
-                    const isCheck7 = result.checkId === 7;
-                    const severity = isCheck7 ? (row['severity'] as string | undefined) : undefined;
-                    const rowStyle: React.CSSProperties = {
-                      borderColor: 'var(--mc-card-border)',
-                      ...(severity === 'red'
-                        ? { backgroundColor: 'rgba(239, 68, 68, 0.12)', borderLeft: '3px solid rgba(239, 68, 68, 0.7)' }
-                        : severity === 'orange'
-                        ? { backgroundColor: 'rgba(251, 146, 60, 0.12)', borderLeft: '3px solid rgba(251, 146, 60, 0.7)' }
-                        : {}),
-                    };
-                    const displayEntries = Object.entries(row).filter(
-                      ([k]) => !(isCheck7 && k === 'severity'),
-                    );
-                    return (
-                      <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={rowStyle}>
-                        {displayEntries.map(([k, v]) => (
-                          <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
-                            {String(v ?? '—')}
-                          </td>
-                        ))}
-                      </tr>
-                    );
-                  })}
+                  {result.flaggedRows.slice(0, 200).map((row, i) => (
+                    <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={{ borderColor: 'var(--mc-card-border)' }}>
+                      {Object.entries(row).map(([k, v]) => (
+                        <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
+                          {String(v ?? '—')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
               {result.flaggedRows.length > 200 && (
