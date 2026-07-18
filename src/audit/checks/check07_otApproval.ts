@@ -32,6 +32,13 @@
 //
 // Matching uses column B "Associate" from the OT Approval tab.
 // Names are compared case-insensitive with leading/trailing whitespace stripped.
+//
+// Row key: `${sheet}|${rowNum}` — stable, unique per upload, handles multiple OT
+// rows per person per week. (T-590)
+//
+// Approver name: the matched OtApprovalRow.associateName AS WRITTEN ON THE TAB,
+// so Allan can spot bad/fuzzy name matches (T-590 spec §2). Tab-approved rows get
+// section='tabApproved'; they feed display/export only, never flagged[]. (T-590)
 
 import type { CheckResult, LaborRow, OtApprovalRow } from '../types';
 import { toStr } from '../../lib/num';
@@ -72,16 +79,21 @@ export function check07OtApproval(
   const OT_EXEC_MIN      = rules.otApprovalExecMin ?? 4.0;
   const otExceptions     = rules.otExceptions ?? [];
 
-  // ── Step 1: Build approved-name set from OT Approval tab ────────────────────
+  // ── Step 1: Build approved-name → matched associateName map from OT Approval tab ─
   // An employee is approved if ANY row has Status="Approved" AND ApprovalType="Overtime"
   // (case-insensitive, trimmed). A single such row covers both DL and Exec tiers.
+  // Value = the OtApprovalRow.associateName AS WRITTEN ON THE TAB (not normalised),
+  // so Allan can inspect the exact match that was used.
 
-  const approvedNames = new Set<string>();
+  const approvedNameMap = new Map<string, string>(); // nameKey → tabAssociateName
   for (const r of otApprovalRows) {
     const statusOk = toStr(r.status).trim().toLowerCase() === 'approved';
     const typeOk   = toStr(r.approvalType).trim().toLowerCase() === 'overtime';
     if (statusOk && typeOk) {
-      approvedNames.add(toStr(r.associateName).trim().toLowerCase());
+      const key = toStr(r.associateName).trim().toLowerCase();
+      if (!approvedNameMap.has(key)) {
+        approvedNameMap.set(key, toStr(r.associateName).trim());
+      }
     }
   }
 
@@ -90,6 +102,7 @@ export function check07OtApproval(
 
   const flagged: Record<string, unknown>[] = [];
   const blanketApproved: Record<string, unknown>[] = [];
+  const tabApproved: Record<string, unknown>[] = [];
   let belowThresholdCount = 0;
   let approvedCount = 0;
   let otRowCount = 0;
@@ -101,6 +114,7 @@ export function check07OtApproval(
     otRowCount++;
     const hrs = r.timeHours;
     const sheet = r.sheet ?? 'Unknown';
+    const rowKey = `${sheet}|${r.rowNum}`;
 
     // ≤ OT_APPROVAL_MIN: no approval needed for this entry
     if (hrs <= OT_APPROVAL_MIN) {
@@ -116,12 +130,17 @@ export function check07OtApproval(
 
     if (matchingException) {
       blanketApproved.push({
-        section: 'blanketApproved',
-        location: sheet,
+        section: 'blanket',
+        rowKey,
+        associateId: r.associateId,
         name: r.employeeName,
+        sheet,
+        week: matchingException.week,
         otType: bucket,
         hours: hrs.toFixed(2),
-        week: matchingException.week,
+        tier: 'Blanket',
+        status: 'blanket',
+        approvalDetail: `Blanket-approved: week ${matchingException.week}, ≤ ${matchingException.maxHours}hrs — ${matchingException.note || '(blanket approval)'}`,
         issue: `Blanket-approved: week ${matchingException.week}, ≤ ${matchingException.maxHours}hrs — ${matchingException.note || '(blanket approval)'}`,
       });
       continue;
@@ -134,18 +153,40 @@ export function check07OtApproval(
 
     // Check approval
     const nameKey = toStr(r.employeeName).trim().toLowerCase();
-    const isApproved = approvedNames.has(nameKey);
+    const matchedTabName = approvedNameMap.get(nameKey);
+    const isApproved = matchedTabName !== undefined;
 
     if (isApproved) {
       approvedCount++;
-      // Approved: pass silently (no flagged row)
-    } else {
-      flagged.push({
-        location: sheet,
+      // Tab-approved: emitted to tabApproved array for display/export only.
+      // NEVER pushed to flagged[]. Pass/fail invariance preserved.
+      tabApproved.push({
+        section: 'tabApproved',
+        rowKey,
+        associateId: r.associateId,
         name: r.employeeName,
+        sheet,
+        week: week ?? '',
         otType: bucket,
         hours: hrs.toFixed(2),
         tier,
+        status: 'tab_approved',
+        approvalDetail: `Tab-approved — matched: "${matchedTabName}"`,
+        severity,
+      });
+    } else {
+      flagged.push({
+        section: 'flagged',
+        rowKey,
+        associateId: r.associateId,
+        name: r.employeeName,
+        sheet,
+        week: week ?? '',
+        otType: bucket,
+        hours: hrs.toFixed(2),
+        tier,
+        status: 'none',
+        approvalDetail: 'No matching Approved/Overtime row found in OT Approval tab',
         severity,
         approved: false,
         issue: `${bucket} ${hrs.toFixed(2)}hrs — ${tier} — no matching Approved/Overtime row found in OT Approval tab`,
@@ -154,6 +195,7 @@ export function check07OtApproval(
   }
 
   // ── Step 3: Build result ─────────────────────────────────────────────────────
+  // Pass/fail is determined ONLY by flagged.length. tabApproved rows never affect it.
 
   if (otRowCount === 0 && otApprovalRows.length === 0) {
     return {
@@ -170,11 +212,15 @@ export function check07OtApproval(
   statParts.push(`${otRowCount} OT entr${otRowCount === 1 ? 'y' : 'ies'} evaluated`);
   if (belowThresholdCount > 0) statParts.push(`${belowThresholdCount} at/below ${OT_APPROVAL_MIN}hr threshold (exempt)`);
   if (blanketApproved.length > 0) statParts.push(`${blanketApproved.length} blanket-approved`);
+  if (tabApproved.length > 0) statParts.push(`${tabApproved.length} tab-approved`);
   if (approvedCount > 0) statParts.push(`${approvedCount} approved`);
   statParts.push(`${flagged.length} flagged`);
 
+  // allDetails: blanket + tabApproved + flagged (for display in CheckCard).
+  // No 200-row cap here — cap is removed per T-590 spec §6.
   const allDetails = [
     ...blanketApproved,
+    ...tabApproved,
     ...flagged,
   ];
 
@@ -186,6 +232,6 @@ export function check07OtApproval(
     status: pass ? 'pass' : 'fail',
     stats: statParts.join(', '),
     flaggedCount: flagged.length,
-    flaggedRows: allDetails.slice(0, 200),
+    flaggedRows: allDetails,
   };
 }

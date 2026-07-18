@@ -805,6 +805,7 @@ export default function App() {
                       apiKey={apiKey}
                       program={program}
                       onTokensUsed={addTokens}
+                      invoiceFileName={payload.invoiceFile}
                     />
                   ))}
                 </div>

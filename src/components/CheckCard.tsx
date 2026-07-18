@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
-import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, ZoomIn } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, ZoomIn, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CheckResult, CheckStatus } from '../audit/types';
 import { estimateCost, estimateTokens, analyzeCheck, runDeepDive } from '../ai/bragiClient';
+import { loadVerdict, saveVerdict } from '../audit/check07Verdicts';
+import type { UserVerdict } from '../audit/check07Verdicts';
+import { exportCheck7 } from '../audit/check07Export';
 
 interface CheckCardProps {
   result: CheckResult;
@@ -14,6 +17,8 @@ interface CheckCardProps {
   onTokensUsed?: (inputTokens: number, outputTokens: number) => void;
   // External AI output can be injected from the synthesis pass
   externalAiOutput?: string;
+  // Invoice file name — used for Check 7 export filename
+  invoiceFileName?: string;
 }
 
 const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label: string; icon: React.ReactNode }> = {
@@ -43,7 +48,7 @@ const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label
   },
 };
 
-export function CheckCard({ result, allResults, defaultOpen = false, apiKey, program, onTokensUsed, externalAiOutput }: CheckCardProps) {
+export function CheckCard({ result, allResults, defaultOpen = false, apiKey, program, onTokensUsed, externalAiOutput, invoiceFileName }: CheckCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [aiState, setAiState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [aiOutput, setAiOutput] = useState('');
@@ -54,6 +59,42 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   const [ddError, setDdError] = useState('');
   // Check 19: session-scoped per-row dismiss (resets automatically when component remounts on new upload)
   const [dismissedCheck19, setDismissedCheck19] = useState<Set<string>>(new Set());
+  // Check 7: verdict state map (rowKey → UserVerdict). Keyed by rowKey, initialised from localStorage.
+  // Re-renders when any verdict changes so the UI reflects the updated state.
+  const [check7Verdicts, setCheck7Verdicts] = useState<Map<string, UserVerdict>>(() => {
+    if (result.checkId !== 7) return new Map();
+    const map = new Map<string, UserVerdict>();
+    for (const r of result.flaggedRows) {
+      const rowKey = String(r['rowKey'] ?? '');
+      if (!rowKey || r['status'] !== 'none') continue;
+      const snapshot = {
+        name:   String(r['name']   ?? ''),
+        otType: String(r['otType'] ?? ''),
+        hours:  String(r['hours']  ?? ''),
+      };
+      const { verdict } = loadVerdict(rowKey, snapshot);
+      if (verdict !== 'none') map.set(rowKey, verdict);
+    }
+    return map;
+  });
+
+  const setCheck7Verdict = useCallback((rowKey: string, verdict: UserVerdict, r: Record<string, unknown>) => {
+    const snapshot = {
+      name:   String(r['name']   ?? ''),
+      otType: String(r['otType'] ?? ''),
+      hours:  String(r['hours']  ?? ''),
+    };
+    saveVerdict(rowKey, verdict, snapshot);
+    setCheck7Verdicts((prev) => {
+      const next = new Map(prev);
+      if (verdict === 'none') {
+        next.delete(rowKey);
+      } else {
+        next.set(rowKey, verdict);
+      }
+      return next;
+    });
+  }, []);
   const s = STATUS_STYLES[result.status];
 
   const showBragiButton = (result.status === 'fail' || result.status === 'warning') && apiKey.trim();
@@ -145,17 +186,54 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
         <div className="border-t px-5 py-4 space-y-4" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(7, 9, 15, 0.5)' }}>
           {/* Failure table */}
           {result.checkId === 7 ? (
-            // Check 7 — split blanket-approved entries from actionable unapproved OT
+            // Check 7 — OT review with verdict controls and export
             (() => {
-              const blanketRows = result.flaggedRows.filter((r) => r['section'] === 'blanketApproved');
-              const unapprovedRows = result.flaggedRows.filter((r) => r['section'] !== 'blanketApproved');
+              const blanketRows  = result.flaggedRows.filter((r) => r['section'] === 'blanket');
+              const tabApprRows  = result.flaggedRows.filter((r) => r['section'] === 'tabApproved');
+              // Actionable rows: only those that were flagged (section='flagged')
+              // NOT blanket, NOT tab-approved
+              const actionableRows = result.flaggedRows.filter(
+                (r) => r['section'] !== 'blanket' && r['section'] !== 'tabApproved',
+              );
+
               const totalBlanketHrs = blanketRows.reduce(
                 (sum, r) => sum + parseFloat(String(r['hours'] ?? '0')),
                 0,
               );
-              const blanketNote = blanketRows.length > 0 ? String(blanketRows[0]['issue'] ?? '') : '';
+              const blanketNote = blanketRows.length > 0 ? String(blanketRows[0]['approvalDetail'] ?? blanketRows[0]['issue'] ?? '') : '';
+              const totalTabApprHrs = tabApprRows.reduce(
+                (sum, r) => sum + parseFloat(String(r['hours'] ?? '0')),
+                0,
+              );
+
+              // Display columns for actionable rows (hide internal fields)
+              const HIDDEN_COLS = new Set(['section', 'severity', 'approved', 'issue', 'status']);
+
               return (
                 <div className="space-y-3">
+                  {/* Export button */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-mc-dim">
+                      {actionableRows.length} pending review · {blanketRows.length + tabApprRows.length} auto-resolved
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => exportCheck7(result.flaggedRows, invoiceFileName ?? result.checkName)}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition"
+                      style={{
+                        border: '1px solid rgba(59,158,255,0.4)',
+                        backgroundColor: 'rgba(59,158,255,0.06)',
+                        color: '#3b9eff',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(59,158,255,0.12)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(59,158,255,0.06)')}
+                      title="Export Pending and Resolved tabs to XLSX"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Export OT Review
+                    </button>
+                  </div>
+
                   {/* Green summary bar for blanket-approved entries */}
                   {blanketRows.length > 0 && (
                     <div
@@ -174,27 +252,55 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                       </span>
                     </div>
                   )}
-                  {/* Individual rows for unapproved OT entries (actionable) */}
-                  {unapprovedRows.length > 0 ? (
+
+                  {/* Blue summary bar for tab-approved entries */}
+                  {tabApprRows.length > 0 && (
+                    <div
+                      className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs"
+                      style={{
+                        backgroundColor: 'rgba(59, 158, 255, 0.08)',
+                        border: '1px solid rgba(59, 158, 255, 0.25)',
+                        color: '#3b9eff',
+                      }}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                      <span className="font-medium">
+                        {tabApprRows.length} {tabApprRows.length === 1 ? 'entry' : 'entries'} approved via OT Approval tab
+                        {' · '}{totalTabApprHrs.toFixed(2)} hrs
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Actionable rows table with verdict controls */}
+                  {actionableRows.length > 0 ? (
                     <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--mc-card-border)' }}>
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
-                            {Object.keys(unapprovedRows[0])
-                              .filter((k) => k !== 'severity')
+                            {Object.keys(actionableRows[0])
+                              .filter((k) => !HIDDEN_COLS.has(k))
                               .map((k) => (
                                 <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
-                                  {k}
+                                  {k === 'approvalDetail' ? 'Approval Detail' : k}
                                 </th>
                               ))}
+                            <th className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                              Verdict
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
-                          {unapprovedRows.slice(0, 200).map((row, i) => {
+                          {actionableRows.map((row, i) => {
                             const severity = row['severity'] as string | undefined;
+                            const rowKey = String(row['rowKey'] ?? '');
+                            const verdict: UserVerdict = rowKey ? (check7Verdicts.get(rowKey) ?? 'none') : 'none';
                             const rowStyle: React.CSSProperties = {
                               borderColor: 'var(--mc-card-border)',
-                              ...(severity === 'red'
+                              ...(verdict === 'approved'
+                                ? { backgroundColor: 'rgba(34, 208, 107, 0.08)', borderLeft: '3px solid rgba(34, 208, 107, 0.5)' }
+                                : verdict === 'not_approved'
+                                ? { backgroundColor: 'rgba(239, 68, 68, 0.08)', borderLeft: '3px solid rgba(239, 68, 68, 0.5)' }
+                                : severity === 'red'
                                 ? { backgroundColor: 'rgba(239, 68, 68, 0.12)', borderLeft: '3px solid rgba(239, 68, 68, 0.7)' }
                                 : severity === 'orange'
                                 ? { backgroundColor: 'rgba(251, 146, 60, 0.12)', borderLeft: '3px solid rgba(251, 146, 60, 0.7)' }
@@ -203,26 +309,62 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                             return (
                               <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={rowStyle}>
                                 {Object.entries(row)
-                                  .filter(([k]) => k !== 'severity')
+                                  .filter(([k]) => !HIDDEN_COLS.has(k))
                                   .map(([k, v]) => (
                                     <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
                                       {String(v ?? '—')}
                                     </td>
                                   ))}
+                                {/* Verdict controls */}
+                                <td className="px-3 py-1.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      title="Mark approved"
+                                      onClick={() => setCheck7Verdict(rowKey, verdict === 'approved' ? 'none' : 'approved', row)}
+                                      className="rounded px-2 py-0.5 text-[10px] font-medium transition"
+                                      style={{
+                                        border: verdict === 'approved'
+                                          ? '1px solid rgba(34,208,107,0.6)'
+                                          : '1px solid var(--mc-card-border)',
+                                        backgroundColor: verdict === 'approved'
+                                          ? 'rgba(34,208,107,0.15)'
+                                          : 'transparent',
+                                        color: verdict === 'approved' ? '#22d06b' : 'var(--mc-dim)',
+                                      }}
+                                    >
+                                      ✓ OK
+                                    </button>
+                                    <button
+                                      type="button"
+                                      title="Mark not approved"
+                                      onClick={() => setCheck7Verdict(rowKey, verdict === 'not_approved' ? 'none' : 'not_approved', row)}
+                                      className="rounded px-2 py-0.5 text-[10px] font-medium transition"
+                                      style={{
+                                        border: verdict === 'not_approved'
+                                          ? '1px solid rgba(239,68,68,0.6)'
+                                          : '1px solid var(--mc-card-border)',
+                                        backgroundColor: verdict === 'not_approved'
+                                          ? 'rgba(239,68,68,0.15)'
+                                          : 'transparent',
+                                        color: verdict === 'not_approved' ? '#f87171' : 'var(--mc-dim)',
+                                      }}
+                                    >
+                                      ✗ No
+                                    </button>
+                                  </div>
+                                </td>
                               </tr>
                             );
                           })}
                         </tbody>
                       </table>
-                      {unapprovedRows.length > 200 && (
-                        <p className="px-3 py-2 text-[10px] text-mc-dim">
-                          Showing 200 of {unapprovedRows.length} rows
-                        </p>
-                      )}
                     </div>
-                  ) : blanketRows.length === 0 ? (
+                  ) : blanketRows.length === 0 && tabApprRows.length === 0 ? (
                     <p className="text-xs text-mc-dim">No flagged rows for this check.</p>
-                  ) : null}
+                  ) : (
+                    <p className="text-xs text-mc-dim italic">All OT entries are covered — no pending review items.</p>
+                  )}
                 </div>
               );
             })()
