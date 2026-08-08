@@ -893,6 +893,16 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
   const cHrs  = findCol('time hours', 'total hours', 'hours', 'duration');
   const cTag  = findCol('payroll tag', 'tag');
   const cType = findCol('time type', 'type');
+  // T-672 — date-level variance sourcing. Deliberately NO bare 'date' alias:
+  // findCol's partial-match fallback picks the FIRST alias that appears as a
+  // substring in ANY header, so a generic 'date' alias risks silently
+  // latching onto some other date-ish column on a punch export we haven't
+  // seen. 'date in' matches the real export's header exactly; the two
+  // fallbacks are still specific two-word phrases, not a bare word. A miss
+  // here means visitDate stays null (safe) — it never guesses.
+  const cDateIn  = findCol('date in', 'punch date', 'work date');
+  const cTimeIn  = findCol('time in');
+  const cTimeOut = findCol('time out');
 
   const out: SesPunchRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
@@ -914,6 +924,9 @@ export async function parseSesPunchXlsx(file: File): Promise<SesPunchRow[]> {
       timeHours: cHrs >= 0 ? toNum(row[cHrs]) : 0,
       payrollTag: cTag >= 0 ? toStr(row[cTag]) || undefined : undefined,
       timeType:   normalizedTimeType,
+      visitDate:  cDateIn >= 0 ? toDate(row[cDateIn]) : null,
+      timeIn:     cTimeIn  >= 0 ? toStr(row[cTimeIn])  || undefined : undefined,
+      timeOut:    cTimeOut >= 0 ? toStr(row[cTimeOut]) || undefined : undefined,
     });
   }
   return out;
@@ -982,6 +995,16 @@ export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
     'actual minutes',
     'actual',
   );
+  // T-672 — date-level variance sourcing. Real SES shift exports carry a
+  // "Visit Date" column (one row per associate per visit date), confirmed
+  // against production files. 'visit date' is specific enough to need no
+  // bare 'date' fallback — the same sheet also carries PII columns like
+  // "Birthday" and "Program Start Date" that a generic 'date' alias could
+  // latch onto via findCol's partial-match fallback. A miss here means
+  // visitDate stays null for every row (see the ShiftRow.visitDate doc
+  // comment) — the check03/sourceSlice date pivot then degrades to
+  // period-level shift totals rather than fabricating a per-date figure.
+  const cVisitDate = findCol('visit date', 'shift date');
 
   const out: ShiftRow[] = [];
   for (let i = hIdx + 1; i < aoa.length; i++) {
@@ -1009,7 +1032,9 @@ export async function parseShiftReport(file: File): Promise<ShiftRow[]> {
       }
     }
 
-    out.push({ rowNum: i + 1, associateId: id, employeeName: name, actualMinutes });
+    const visitDate = cVisitDate >= 0 ? toDate(row[cVisitDate]) : null;
+
+    out.push({ rowNum: i + 1, associateId: id, employeeName: name, actualMinutes, visitDate });
   }
   return out;
 }

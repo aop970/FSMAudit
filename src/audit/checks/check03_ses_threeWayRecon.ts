@@ -81,33 +81,36 @@ export function check03SesThreeWayRecon(
 
   // ── per-person pivot (fires only on total fail) ──────────────────────────────
 
-  // Build maps: key → hours per source
-  const invoiceMap = new Map<string, { name: string; hrs: number }>();
+  // Build maps: key → hours per source. Also track the raw associateId per
+  // key (T-672) — normKey already prefers the ID when present, so every row
+  // sharing a key either all carry the SAME non-empty associateId or all
+  // carry a blank one; capturing it off the first row per key is sufficient.
+  const invoiceMap = new Map<string, { name: string; id: string; hrs: number }>();
   for (const r of detailRows) {
     const cat = r.comments.toLowerCase().trim();
     if (!PUNCH_SUPPORTED.has(cat)) continue;
     const k = normKey(r.associateId, r.employeeName);
     const existing = invoiceMap.get(k);
     if (existing) existing.hrs += r.timeHours;
-    else invoiceMap.set(k, { name: r.employeeName || r.associateId, hrs: r.timeHours });
+    else invoiceMap.set(k, { name: r.employeeName || r.associateId, id: r.associateId.trim(), hrs: r.timeHours });
   }
 
-  const punchMap = new Map<string, { name: string; hrs: number }>();
+  const punchMap = new Map<string, { name: string; id: string; hrs: number }>();
   for (const r of punchRows) {
     if (!isWorkPunch(r)) continue;
     const k = normKey(r.associateId, r.employeeName);
     const existing = punchMap.get(k);
     if (existing) existing.hrs += r.timeHours;
-    else punchMap.set(k, { name: r.employeeName || r.associateId, hrs: r.timeHours });
+    else punchMap.set(k, { name: r.employeeName || r.associateId, id: r.associateId.trim(), hrs: r.timeHours });
   }
 
-  const shiftMap = new Map<string, { name: string; hrs: number }>();
+  const shiftMap = new Map<string, { name: string; id: string; hrs: number }>();
   for (const r of shiftRows) {
     const k = normKey(r.associateId, r.employeeName);
     const hrs = r.actualMinutes / 60;
     const existing = shiftMap.get(k);
     if (existing) existing.hrs += hrs;
-    else shiftMap.set(k, { name: r.employeeName || r.associateId, hrs });
+    else shiftMap.set(k, { name: r.employeeName || r.associateId, id: r.associateId.trim(), hrs });
   }
 
   // Union of all keys
@@ -119,6 +122,13 @@ export function check03SesThreeWayRecon(
     const pch  = punchMap.get(k)?.hrs  ?? 0;
     const sft  = shiftMap.get(k)?.hrs  ?? 0;
     const name = invoiceMap.get(k)?.name ?? punchMap.get(k)?.name ?? shiftMap.get(k)?.name ?? k;
+    // T-672: propagate the associateId so downstream AI source-slicing can
+    // match punch/shift rows by ID instead of by name (Vera's T-671 review
+    // flagged the name-only match as a fabrication risk — a name spelled
+    // differently between files silently dropped that associate's punch/
+    // shift rows from the Deep Dive prompt). Blank when no row for this
+    // associate carried an ID (normKey falls back to name in that case).
+    const id = invoiceMap.get(k)?.id || punchMap.get(k)?.id || shiftMap.get(k)?.id || '';
 
     const ivp = !noPunch ? Math.abs(inv - pch) : null;
     const ivs = !noShift ? Math.abs(inv - sft) : null;
@@ -134,6 +144,7 @@ export function check03SesThreeWayRecon(
       associate: name,
       invoiceHrs: inv.toFixed(2),
     };
+    if (id) entry.associateId = id;
     if (!noPunch) {
       entry.punchHrs = pch.toFixed(2);
       entry.invoiceVsPunch = (inv - pch).toFixed(2);

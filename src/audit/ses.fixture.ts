@@ -83,12 +83,12 @@ function invoiceRow(associateId: string, employeeName: string, timeHours: number
   };
 }
 
-function punchRow(associateId: string, employeeName: string, timeHours: number, timeType?: string): SesPunchRow {
-  return { rowNum: ++rowNum, employeeName, associateId, timeHours, timeType };
+function punchRow(associateId: string, employeeName: string, timeHours: number, timeType?: string, visitDate: Date | null = null): SesPunchRow {
+  return { rowNum: ++rowNum, employeeName, associateId, timeHours, timeType, visitDate };
 }
 
-function shiftRow(associateId: string, employeeName: string, hours: number): ShiftRow {
-  return { rowNum: ++rowNum, employeeName, associateId, actualMinutes: hours * 60 };
+function shiftRow(associateId: string, employeeName: string, hours: number, visitDate: Date | null = null): ShiftRow {
+  return { rowNum: ++rowNum, employeeName, associateId, actualMinutes: hours * 60, visitDate };
 }
 
 function pivotRow(res: ReturnType<typeof check03SesThreeWayRecon>, associate: string) {

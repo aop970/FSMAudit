@@ -25,6 +25,7 @@ import {
   buildAssociateSourceSlice,
   MAX_ASSOCIATES_PER_DEEP_DIVE,
   MAX_SOURCE_ROWS_PER_ASSOCIATE_PER_SOURCE,
+  MAX_DATES_PER_ASSOCIATE_PIVOT,
 } from './sourceSlice.js';
 import { buildDeepDivePrompt } from './promptTemplates.js';
 import { estimateTokens, estimateAnalyzeAllCost } from './bragiClient.js';
@@ -52,20 +53,20 @@ function assert(label: string, cond: boolean, detail?: string): void {
 
 let rowNum = 0;
 
-function invoiceRow(associateId: string, employeeName: string, timeHours: number, comments: string): LaborRow {
+function invoiceRow(associateId: string, employeeName: string, timeHours: number, comments: string, visitDate: Date | null = null): LaborRow {
   return {
     sheet: 'FSM I', rowNum: ++rowNum, employeeName, associateId, associateType: 'SES',
     timeHours, basePayRate: 0, muValue: 0, billValue: 0, loadedRate: 0, associateState: '',
-    comments, visitDate: null, week: null, clientStoreId: '',
+    comments, visitDate, week: null, clientStoreId: '',
   };
 }
 
-function punchRow(associateId: string, employeeName: string, timeHours: number, timeType?: string): SesPunchRow {
-  return { rowNum: ++rowNum, employeeName, associateId, timeHours, timeType };
+function punchRow(associateId: string, employeeName: string, timeHours: number, timeType?: string, visitDate: Date | null = null): SesPunchRow {
+  return { rowNum: ++rowNum, employeeName, associateId, timeHours, timeType, visitDate };
 }
 
-function shiftRow(associateId: string, employeeName: string, hours: number): ShiftRow {
-  return { rowNum: ++rowNum, employeeName, associateId, actualMinutes: hours * 60 };
+function shiftRow(associateId: string, employeeName: string, hours: number, visitDate: Date | null = null): ShiftRow {
+  return { rowNum: ++rowNum, employeeName, associateId, actualMinutes: hours * 60, visitDate };
 }
 
 function emptyParsedData(): ParsedData {
@@ -79,7 +80,8 @@ function emptyParsedData(): ParsedData {
 }
 
 // ── Fixture: a Check-3-shaped result (mirrors check03SesThreeWayRecon's actual
-// output shape — 'associate' is a NAME, no associateId field at all) ───────────
+// output shape as of T-672 — 'associate' is a NAME, PLUS an 'associateId'
+// field the check now also emits so downstream matching can go by ID) ──────
 //
 // Alice, Bob, Cara: flagged with modest variance. Dan: large variance (the
 // worst offender — should rank first under severity, even though he appears
@@ -87,13 +89,15 @@ function emptyParsedData(): ParsedData {
 // synthetic associates are added purely to exceed MAX_ASSOCIATES_PER_DEEP_DIVE
 // so the omission-disclosure path fires.
 
-function check3ShapedFlaggedRow(associate: string, invoiceHrs: number, punchHrs: number): Record<string, unknown> {
-  return {
+function check3ShapedFlaggedRow(associateId: string, associate: string, invoiceHrs: number, punchHrs: number): Record<string, unknown> {
+  const row: Record<string, unknown> = {
     associate,
     invoiceHrs: invoiceHrs.toFixed(2),
     punchHrs: punchHrs.toFixed(2),
     invoiceVsPunch: (invoiceHrs - punchHrs).toFixed(2),
   };
+  if (associateId) row.associateId = associateId; // real check03 omits the key entirely when blank — see check03_ses_threeWayRecon.ts
+  return row;
 }
 
 const check3Result: CheckResult = {
@@ -104,21 +108,21 @@ const check3Result: CheckResult = {
   flaggedCount: 12,
   flaggedRows: [
     { associate: '— TOTAL —', invoiceHrs: '400.00', punchHrs: '350.00', invoiceVsPunch: '50.00' },
-    check3ShapedFlaggedRow('Alice Anderson', 40.00, 39.00),   // variance 1.00
-    check3ShapedFlaggedRow('Bob Blankfield', 20.00, 18.50),   // variance 1.50
-    check3ShapedFlaggedRow('Dan Dayoff', 30.00, 5.00),        // variance 25.00 — worst offender
+    check3ShapedFlaggedRow('A1', 'Alice Anderson', 40.00, 39.00),   // variance 1.00
+    check3ShapedFlaggedRow('B1', 'Bob Blankfield', 20.00, 18.50),   // variance 1.50
+    check3ShapedFlaggedRow('D1', 'Dan Dayoff', 30.00, 5.00),        // variance 25.00 — worst offender
     // 9 filler associates, each with a SMALLER variance (0.1–0.9) than both
     // Alice (1.00) and Bob (1.50) — pushes total candidates past the cap
     // while proving severity ranking (not flaggedRows order) decides who's
     // included: Dan, Bob, and Alice must all outrank most fillers.
     ...Array.from({ length: 9 }, (_, i) =>
-      check3ShapedFlaggedRow(`Filler Associate ${i}`, 10.00, 10.00 - 0.1 * (i + 1))),
+      check3ShapedFlaggedRow(`F${i}`, `Filler Associate ${i}`, 10.00, 10.00 - 0.1 * (i + 1))),
   ],
 };
 
-// ── Test 1: identity extraction — name-keyed rows now resolve, '— TOTAL —' excluded ──
+// ── Test 1: identity extraction — ID-keyed rows now resolve, '— TOTAL —' excluded ──
 
-console.log('\nAssociate identity extraction (T-669 fix)');
+console.log('\nAssociate identity extraction (T-669 fix, updated T-672 for ID propagation)');
 
 const identities = extractAssociateIdentities(check3Result.flaggedRows);
 assert(
@@ -126,7 +130,14 @@ assert(
   identities.length === 12,
   `got ${identities.length}`,
 );
-assert('all extracted identities are name-keyed (Check 3 rows carry no associateId)', identities.every((i) => i.kind === 'name'));
+// T-672: check03SesThreeWayRecon now emits associateId on every per-person
+// row (Bragi/Allan: real punch Associate ID and shift Vendor EMP ID use the
+// identical format, 355/366 overlap measured on production data) — so
+// extractRowIdentity (id-preferred) resolves these as kind:'id' now, not
+// kind:'name' as before T-672. The '— TOTAL —' summary row still has no ID
+// (and is excluded entirely, tested below) — this assertion is intentionally
+// updated, not silently deleted, per Bragi's T-672 instruction.
+assert('all extracted identities are ID-keyed (Check 3 rows now carry associateId — T-672)', identities.every((i) => i.kind === 'id'));
 assert(
   "'— TOTAL —' produces no identity at all",
   extractRowIdentity({ associate: '— TOTAL —', invoiceHrs: '400.00' }) === null,
@@ -140,12 +151,17 @@ assert(
   extractRowIdentity({ associate: 'Total Recall' }) !== null, // contains "Total" as a word but isn't the synthetic pattern
 );
 
-// ── Test 2: cross-check bundle — previously empty for name-keyed Check 3 rows ──
+// ── Test 2: cross-check bundle — matches a name-only sibling even though Check 3 now carries an ID too ──
 
-console.log('\nContext bundle — name-keyed cross-check matching (T-669 fix)');
+console.log('\nContext bundle — dual-key cross-check matching (T-669 fix, T-672 dual-key update)');
 
 // Another check (Check 18, holiday validation) flags Dan Dayoff by name only —
 // exactly like check17/check18 do in the real app (employeeName field, no ID).
+// Check 3's OWN row for Dan now ALSO carries associateId (T-672) — this test
+// proves that addition did not regress matching against siblings that still
+// only have a name: contextBundle.ts collects BOTH an id-key and a name-key
+// per target row (extractRowMatchKeys, not the exclusive-preferred
+// extractRowIdentity), so Check 18's name-only row still finds Dan.
 const check18Result: CheckResult = {
   checkId: 18,
   checkName: 'Holiday Pay Validation',
@@ -160,12 +176,12 @@ const check18Result: CheckResult = {
 const bundle = buildContextBundle(check3Result, [check3Result, check18Result], 'rule text');
 const danCrossCheck = bundle.crossCheckRows.find((e) => e.employeeName === 'Dan Dayoff');
 assert(
-  'bundle is NOT empty for a Check-3-shaped (name-only) flagged row — pre-fix this was always empty',
+  'bundle is NOT empty even though Check 3\'s own rows are now ID-keyed — dual-key extraction keeps name matching alive for siblings without an ID',
   bundle.crossCheckRows.length > 0,
 );
-assert('Dan Dayoff cross-check entry found via name-only matching', danCrossCheck !== undefined);
+assert('Dan Dayoff cross-check entry found via name matching against Check 18\'s ID-less row', danCrossCheck !== undefined);
 assert(
-  'Dan\'s cross-check entry has no associateId (correctly reflects name-only identity, not a fabricated ID)',
+  'Dan\'s cross-check entry has no associateId — it reflects CHECK 18\'s row (which has none), not Check 3\'s',
   danCrossCheck?.associateId === '',
 );
 assert(
@@ -476,9 +492,9 @@ const costProbeCheck: CheckResult = {
   stats: 'Variance exceeds tolerance',
   flaggedCount: 3,
   flaggedRows: [
-    check3ShapedFlaggedRow('Alice Anderson', 40.0, 39.0),
-    check3ShapedFlaggedRow('Bob Blankfield', 20.0, 18.5),
-    check3ShapedFlaggedRow('Dan Dayoff', 30.0, 5.0),
+    check3ShapedFlaggedRow('A1', 'Alice Anderson', 40.0, 39.0),
+    check3ShapedFlaggedRow('B1', 'Bob Blankfield', 20.0, 18.5),
+    check3ShapedFlaggedRow('D1', 'Dan Dayoff', 30.0, 5.0),
   ],
 };
 
@@ -502,19 +518,18 @@ assert(
   reportedHaikuHalf > expectedHaikuUsd / 2,
 );
 
-console.log('\nSource-slice name-matching gap is disclosed to the model (Vera, T-671)');
+console.log('\nName-matching gap: FIXED for Check 3 via associateId (T-672); disclosure remains for still-name-only checks');
 
-// Check 3's flaggedRows carry ONLY `associate: <name>` — no ID field — so
-// extractRowIdentity() always resolves them as kind:'name' and the source
-// slice matches source rows by NAME, even though the check itself reconciled
-// those same associates by associateId. An associate whose punch file spells
-// the name differently (middle initial, trailing space) therefore gets a
-// PARTIAL source block — invoice rows present, punch/shift rows silently
-// absent — with nothing in the prompt distinguishing that from "this person
-// genuinely has no punch rows". Vera flagged the matching semantics to Allan
-// rather than changing them unverified against real payroll names; this pins
-// the mitigation that DID ship: an explicit instruction telling the model not
-// to read an absent source group as an absent associate.
+// Real production measurement (Bragi, T-672): punch Associate ID and shift
+// Vendor EMP ID use the identical format (EE014596, TC1104I, ...), 355 of
+// 366 punch IDs found in the shift file. So matching by ID, not name, is
+// what actually resolves Vera's T-671 fabrication-risk finding: an associate
+// whose punch/shift file spells the name differently (middle initial,
+// trailing space) used to get a silently PARTIAL source block. Check 3 now
+// emits associateId (T-672) specifically so this scenario is fixed, not just
+// disclosed, for Check 3. The disclosure text stays in the prompt as a
+// defensive instruction — it's still load-bearing for OTHER checks
+// (check17/18/7/...) that only ever emit a name, never an ID.
 
 const nameMismatchParsed = emptyParsedData();
 nameMismatchParsed.fsmIRows = [invoiceRow('A2', 'Nia Okonkwo', 40.0, 'Work')];
@@ -522,40 +537,243 @@ nameMismatchParsed.fsmIRows = [invoiceRow('A2', 'Nia Okonkwo', 40.0, 'Work')];
 nameMismatchParsed.sesPunchRows = [punchRow('A2', 'Nia A. Okonkwo ', 30.0, 'Work')];
 nameMismatchParsed.shiftRows = [shiftRow('A2', 'Nia A. Okonkwo ', 30.0)];
 
-const nameMismatchCheck: CheckResult = {
+// FIXED scenario: a Check-3-shaped row, which now carries associateId.
+const nameMismatchCheckFixed: CheckResult = {
   checkId: 3,
   checkName: 'Three-Way Punch Recon',
   status: 'fail',
   stats: 'Variance exceeds 2h tolerance',
   flaggedCount: 1,
-  flaggedRows: [check3ShapedFlaggedRow('Nia Okonkwo', 40.0, 30.0)],
+  flaggedRows: [check3ShapedFlaggedRow('A2', 'Nia Okonkwo', 40.0, 30.0)],
 };
 
-const nameMismatchSlice = buildAssociateSourceSlice(nameMismatchCheck, nameMismatchParsed);
-const niaEntry = nameMismatchSlice.associates.find((a) => a.identity.displayName === 'Nia Okonkwo');
+const nameMismatchSliceFixed = buildAssociateSourceSlice(nameMismatchCheckFixed, nameMismatchParsed);
+const niaEntryFixed = nameMismatchSliceFixed.associates.find((a) => a.identity.displayName === 'Nia Okonkwo');
 
 assert(
-  'KNOWN GAP (flagged to Allan, not silently fixed): a name-keyed associate whose punch file spells the name differently gets NO punch/shift source rows, even though the check reconciled them by associateId',
-  !!niaEntry && !niaEntry.groups.some((g) => g.label.startsWith('SES Punch Detail')),
-  `groups present: ${niaEntry?.groups.map((g) => g.label.split(' (')[0]).join(', ') ?? 'none'}`,
+  'FIXED: an associate matched by ID gets punch source rows DESPITE the name mismatch (middle initial + trailing space)',
+  !!niaEntryFixed && niaEntryFixed.groups.some((g) => g.label.startsWith('SES Punch Detail')),
+  `groups present: ${niaEntryFixed?.groups.map((g) => g.label.split(' (')[0]).join(', ') ?? 'none'}`,
 );
 assert(
-  'the invoice rows DO still match (so the block is partial, not empty — the more misleading shape)',
-  !!niaEntry && niaEntry.groups.some((g) => g.label.startsWith('Invoice Labor Rows')),
+  'FIXED: shift source rows are ALSO found, same reason',
+  !!niaEntryFixed && niaEntryFixed.groups.some((g) => g.label.startsWith('Shift Detail')),
+);
+assert(
+  'the identity resolved as ID-kind, not name-kind — that IS the fix',
+  niaEntryFixed?.identity.kind === 'id' && niaEntryFixed?.identity.key === 'a2',
 );
 
-const nameMismatchPrompt = buildDeepDivePrompt(
-  nameMismatchCheck,
-  buildContextBundle(nameMismatchCheck, [nameMismatchCheck], 'rule text'),
-  nameMismatchSlice,
+// STILL-A-GAP scenario: a name-only check (mirrors check17/check18's real
+// shape — 'employeeName' field, no associateId anywhere) hits the exact same
+// mismatched-name source data. This is the companion proof that the
+// disclosure text removed above was NOT deleted for no reason — it is still
+// exactly as necessary for any check T-672 didn't touch.
+const nameOnlyCheck: CheckResult = {
+  checkId: 18,
+  checkName: 'Holiday Pay Validation',
+  status: 'fail',
+  stats: '1 associate flagged',
+  flaggedCount: 1,
+  flaggedRows: [{ employeeName: 'Nia Okonkwo', issue: 'Wrong hours' }], // no associateId field — matches check18_holidays.ts's real shape
+};
+
+const nameOnlySlice = buildAssociateSourceSlice(nameOnlyCheck, nameMismatchParsed);
+const niaEntryNameOnly = nameOnlySlice.associates.find((a) => a.identity.displayName === 'Nia Okonkwo');
+
+assert(
+  'STILL A GAP (by design, not an oversight): a name-only check with the SAME mismatched source data gets NO punch source rows',
+  !!niaEntryNameOnly && !niaEntryNameOnly.groups.some((g) => g.label.startsWith('SES Punch Detail')),
+  `groups present: ${niaEntryNameOnly?.groups.map((g) => g.label.split(' (')[0]).join(', ') ?? 'none'}`,
 );
 assert(
-  'MITIGATION SHIPPED: the prompt explicitly warns that an absent source group means a name-matching gap, NOT an absent associate',
-  /absence of a source file's rows under an associate does NOT mean that associate is missing from that file/i.test(nameMismatchPrompt),
+  'the invoice rows DO still match for the name-only case too (partial block, not empty — the more misleading shape)',
+  !!niaEntryNameOnly && niaEntryNameOnly.groups.some((g) => g.label.startsWith('Invoice Labor Rows')),
+);
+
+const nameMismatchPromptFixed = buildDeepDivePrompt(
+  nameMismatchCheckFixed,
+  buildContextBundle(nameMismatchCheckFixed, [nameMismatchCheckFixed], 'rule text'),
+  nameMismatchSliceFixed,
+);
+const nameOnlyPrompt = buildDeepDivePrompt(
+  nameOnlyCheck,
+  buildContextBundle(nameOnlyCheck, [nameOnlyCheck], 'rule text'),
+  nameOnlySlice,
+);
+
+assert(
+  'the disclosure text is still present for the name-only check (still load-bearing there)',
+  /absence of a source file's rows under an associate does NOT mean that associate is missing from that file/i.test(nameOnlyPrompt)
+  && /never conclude the associate is absent from that file/i.test(nameOnlyPrompt),
 );
 assert(
-  'the prompt forbids reporting a missing-punch/missing-shift root cause on that basis alone',
-  /never conclude the associate is absent from that file/i.test(nameMismatchPrompt),
+  'the prompt tells the model an ID-matched heading (shown in parentheses) is EXEMPT from the name-matching-gap risk',
+  /does NOT apply when the associate's heading above shows an ID in parentheses/i.test(nameMismatchPromptFixed),
+);
+assert(
+  'the ID-matched Nia\'s heading actually shows the ID in parentheses (what the exemption sentence refers to)',
+  nameMismatchPromptFixed.includes('Nia Okonkwo (A2)'),
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-672 — date-level variance sourcing
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Allan: "I am wondering however if it can go deep enough to actually source
+// the date(s) that caused the variance. for example, Tom Johnson had 8 hours
+// on invoice on Jan 1 but only 6.5 hours on punch report for Jan 1."
+//
+// This section proves: (a) the per-date pivot names the actual date and
+// hours for a Tom-Johnson-shaped case; (b) worst-variance dates rank first
+// and truncation is capped + disclosed; (c) when shift data has NO per-date
+// column, the pivot degrades to period-level and the prompt says so
+// explicitly rather than fabricating a per-date shift figure; (d) when shift
+// DOES have dates (the real production case per Bragi's file analysis), the
+// genuine three-way pivot renders with all three legs.
+
+function d(y: number, m: number, day: number): Date {
+  return new Date(y, m - 1, day);
+}
+
+// ── Scenario A: Tom Johnson — shift IS date-attributable (the real case) ────
+
+console.log('\nDate-level pivot — Tom Johnson, three-way with dates (T-672)');
+
+const tomParsed = emptyParsedData();
+tomParsed.fsmIRows = [
+  invoiceRow('T1', 'Tom Johnson', 8.00, 'Work', d(2026, 1, 1)),
+  invoiceRow('T1', 'Tom Johnson', 8.00, 'Work', d(2026, 1, 2)),
+];
+tomParsed.sesPunchRows = [
+  punchRow('T1', 'Tom Johnson', 6.50, 'Work', d(2026, 1, 1)),   // Allan's exact example: 8.00 invoice vs 6.50 punch on Jan 1
+  punchRow('T1', 'Tom Johnson', 8.00, 'Work', d(2026, 1, 2)),   // Jan 2 reconciles cleanly
+  punchRow('T1', 'Tom Johnson', 1.00, 'Travel', d(2026, 1, 2)), // non-Work category same date — context, not counted in Punch hours
+];
+tomParsed.shiftRows = [
+  shiftRow('T1', 'Tom Johnson', 8.00, d(2026, 1, 1)),
+  shiftRow('T1', 'Tom Johnson', 8.00, d(2026, 1, 2)),
+];
+
+const tomCheck: CheckResult = {
+  checkId: 3,
+  checkName: 'Three-Way Punch Recon',
+  status: 'fail',
+  stats: 'Variance exceeds 2h tolerance',
+  flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('T1', 'Tom Johnson', 16.00, 14.50)],
+};
+
+const tomSlice = buildAssociateSourceSlice(tomCheck, tomParsed);
+const tomEntry = tomSlice.associates.find((a) => a.identity.displayName === 'Tom Johnson');
+
+assert('Tom Johnson has a date pivot', tomEntry?.datePivot !== null && tomEntry?.datePivot !== undefined);
+assert('this run\'s shift data IS date-attributable (both shift rows carry visitDate)', tomEntry?.datePivot?.shiftDateAttributable === true);
+assert('2 dates found (Jan 1, Jan 2)', tomEntry?.datePivot?.totalDatesFound === 2);
+
+const jan1 = tomEntry?.datePivot?.dates.find((e) => e.date === '2026-01-01');
+const jan2 = tomEntry?.datePivot?.dates.find((e) => e.date === '2026-01-02');
+assert('Jan 1 entry present with Allan\'s exact numbers: invoice 8.00, punch 6.50', jan1?.invoiceHours === 8 && jan1?.punchHours === 6.5, JSON.stringify(jan1));
+assert('Jan 1 shift hours present (8.00) since shift is date-attributable this run', jan1?.shiftHours === 8);
+assert('Jan 1 ranks FIRST — it has the larger variance (1.5h vs Jan 2\'s ~1h from the Travel-adjacent punch)', tomEntry?.datePivot?.dates[0]?.date === '2026-01-01');
+assert('Jan 2 shows the Travel hour as otherPunchCategories, NOT folded into punchHours', jan2?.punchHours === 8 && (jan2?.otherPunchCategories ?? '').includes('Travel 1.00h'));
+
+const tomPrompt = buildDeepDivePrompt(tomCheck, buildContextBundle(tomCheck, [tomCheck], 'rule text'), tomSlice);
+assert('rendered prompt contains the DATE-LEVEL VARIANCE header', tomPrompt.includes('DATE-LEVEL VARIANCE'));
+assert('rendered prompt names 2026-01-01 with the exact invoice/punch numbers Allan asked for', /2026-01-01: Invoice 8\.00h \| Punch 6\.50h/.test(tomPrompt));
+assert('rendered prompt instructs the model to name specific dates from the pivot', /name the SPECIFIC DATE\(S\)/.test(tomPrompt));
+
+console.log('\n--- T-672: DATE-LEVEL VARIANCE section for Tom Johnson (excerpt) ---');
+const dateVarianceIdx = tomPrompt.indexOf('DATE-LEVEL VARIANCE');
+console.log(tomPrompt.slice(dateVarianceIdx, dateVarianceIdx + 400));
+console.log('--- end excerpt ---\n');
+
+// ── Scenario B: shift NOT date-attributable — must degrade, never fabricate ──
+
+console.log('\nDate-level pivot — shift has no date column, degrades to period-level (T-672)');
+
+const noShiftDateParsed = emptyParsedData();
+noShiftDateParsed.fsmIRows = [invoiceRow('T2', 'Tara Jenkins', 8.00, 'Work', d(2026, 1, 1))];
+noShiftDateParsed.sesPunchRows = [punchRow('T2', 'Tara Jenkins', 6.00, 'Work', d(2026, 1, 1))];
+// Shift rows exist but carry NO date (older export shape) — actualMinutes
+// only, visitDate stays null (the default param), same as a real legacy file.
+noShiftDateParsed.shiftRows = [shiftRow('T2', 'Tara Jenkins', 40.00)]; // one period-total row, no date
+
+const taraCheck: CheckResult = {
+  checkId: 3,
+  checkName: 'Three-Way Punch Recon',
+  status: 'fail',
+  stats: 'Variance exceeds 2h tolerance',
+  flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('T2', 'Tara Jenkins', 8.00, 6.00)],
+};
+
+const taraSlice = buildAssociateSourceSlice(taraCheck, noShiftDateParsed);
+const taraEntry = taraSlice.associates.find((a) => a.identity.displayName === 'Tara Jenkins');
+
+assert('this run\'s shift data is NOT date-attributable (the one shift row has no visitDate)', taraEntry?.datePivot?.shiftDateAttributable === false);
+assert('Jan 1 entry still has invoice/punch (those DO have dates)', taraEntry?.datePivot?.dates[0]?.invoiceHours === 8 && taraEntry?.datePivot?.dates[0]?.punchHours === 6);
+assert('Jan 1 entry\'s shiftHours is null — never fabricated from the period total', taraEntry?.datePivot?.dates[0]?.shiftHours === null);
+
+const taraPrompt = buildDeepDivePrompt(taraCheck, buildContextBundle(taraCheck, [taraCheck], 'rule text'), taraSlice);
+assert(
+  'the prompt explicitly states shift is period-level only for this associate — never implies a per-date figure',
+  /Shift is NOT broken out by date here/.test(taraPrompt) && /Do not state or infer a per-date shift figure/.test(taraPrompt),
+);
+assert(
+  'the per-date lines do NOT print a fabricated shift number (no "| Shift" suffix when shiftDateAttributable is false)',
+  !/2026-01-01:.*\| Shift/.test(taraPrompt),
+);
+// The period-level Shift Detail SourceGroup (T-669's existing mechanism)
+// still carries the real period total, just not date-bucketed — confirms
+// the leg isn't silently dropped, only its date-attribution is withheld.
+assert(
+  'the period-level Shift Detail source rows are still present elsewhere in the prompt (leg not dropped, just not dated)',
+  taraEntry?.groups.some((g) => g.label.startsWith('Shift Detail')) ?? false,
+);
+
+// ── Scenario C: truncation — worst-variance dates survive the cap ───────────
+
+console.log('\nDate-level pivot — truncation ranked by variance, not earliest-first (T-672)');
+
+const manyDatesParsed = emptyParsedData();
+const MANY_DATES_COUNT = MAX_DATES_PER_ASSOCIATE_PIVOT + 5;
+manyDatesParsed.fsmIRows = Array.from({ length: MANY_DATES_COUNT }, (_, i) =>
+  invoiceRow('T3', 'Uma Patterson', 8.00, 'Work', d(2026, 1, i + 1)));
+manyDatesParsed.sesPunchRows = Array.from({ length: MANY_DATES_COUNT }, (_, i) =>
+  // Variance grows with i, so the LAST (latest-dated) days have the biggest
+  // gaps — proves ranking is by variance, not by earliest date surviving.
+  punchRow('T3', 'Uma Patterson', 8.00 - (i + 1) * 0.1, 'Work', d(2026, 1, i + 1)));
+
+const umaCheck: CheckResult = {
+  checkId: 3,
+  checkName: 'Three-Way Punch Recon',
+  status: 'fail',
+  stats: 'Variance exceeds 2h tolerance',
+  flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('T3', 'Uma Patterson', 8.00 * MANY_DATES_COUNT, 8.00 * MANY_DATES_COUNT - 0.1 * MANY_DATES_COUNT * (MANY_DATES_COUNT + 1) / 2)],
+};
+
+const umaSlice = buildAssociateSourceSlice(umaCheck, manyDatesParsed);
+const umaEntry = umaSlice.associates.find((a) => a.identity.displayName === 'Uma Patterson');
+
+assert(`${MANY_DATES_COUNT} total dates found (pre-cap)`, umaEntry?.datePivot?.totalDatesFound === MANY_DATES_COUNT);
+assert(`dates capped at MAX_DATES_PER_ASSOCIATE_PIVOT (${MAX_DATES_PER_ASSOCIATE_PIVOT})`, umaEntry?.datePivot?.dates.length === MAX_DATES_PER_ASSOCIATE_PIVOT);
+assert(`omittedDateCount reflects the cut (${MANY_DATES_COUNT - MAX_DATES_PER_ASSOCIATE_PIVOT})`, umaEntry?.datePivot?.omittedDateCount === MANY_DATES_COUNT - MAX_DATES_PER_ASSOCIATE_PIVOT);
+assert(
+  'the LAST (latest, worst-variance) date survives — not the earliest — proving variance ranking, not chronological truncation',
+  umaEntry?.datePivot?.dates[0]?.date === `2026-01-${String(MANY_DATES_COUNT).padStart(2, '0')}`,
+  `top date: ${umaEntry?.datePivot?.dates[0]?.date}`,
+);
+assert(
+  'the earliest (smallest-variance) date did NOT survive the cap',
+  !umaEntry?.datePivot?.dates.some((e) => e.date === '2026-01-01'),
+);
+
+const umaPrompt = buildDeepDivePrompt(umaCheck, buildContextBundle(umaCheck, [umaCheck], 'rule text'), umaSlice);
+assert(
+  'the rendered prompt discloses the omitted-dates count for this associate',
+  umaPrompt.includes(`${MANY_DATES_COUNT - MAX_DATES_PER_ASSOCIATE_PIVOT} additional date(s) omitted`),
 );
 
 // ── Summary ───────────────────────────────────────────────────────────────────

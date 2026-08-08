@@ -1,7 +1,7 @@
 // contextBundle.ts — Builds Tier 2 cross-check context bundles for Deep Dive calls
 
 import type { CheckResult } from '../audit/types';
-import { extractAssociateIdentities, matchRowAgainstIdentitySets } from './associateIdentity';
+import { extractRowMatchKeys, matchRowAgainstIdentitySets } from './associateIdentity';
 
 const MAX_CROSS_ROWS_PER_EMPLOYEE = 20;
 
@@ -38,9 +38,22 @@ export function buildContextBundle(
   allResults: CheckResult[],
   ruleText: string,
 ): ContextBundle {
-  const identities = extractAssociateIdentities(targetResult.flaggedRows);
+  // T-672: collect BOTH an id-key and a name-key per target row (not the
+  // single exclusive-preferred identity extractAssociateIdentities would
+  // give). Check 3 now emits associateId alongside its display name, so a
+  // row-by-row exclusive-preferred extraction would resolve it as id-only
+  // and silently drop the name as a match key — breaking correlation
+  // against sibling checks (17, 18, ...) that still only ever emit a name
+  // for the same associate. Using both keeps both paths open.
+  const idKeys = new Set<string>();
+  const nameKeys = new Set<string>();
+  for (const row of targetResult.flaggedRows) {
+    const { idKey, nameKey } = extractRowMatchKeys(row);
+    if (idKey) idKeys.add(idKey);
+    if (nameKey) nameKeys.add(nameKey);
+  }
 
-  if (identities.length === 0) {
+  if (idKeys.size === 0 && nameKeys.size === 0) {
     return {
       checkId: targetResult.checkId,
       checkName: targetResult.checkName,
@@ -49,10 +62,17 @@ export function buildContextBundle(
     };
   }
 
-  const idKeys = new Set(identities.filter((i) => i.kind === 'id').map((i) => i.key));
-  const nameKeys = new Set(identities.filter((i) => i.kind === 'name').map((i) => i.key));
-
-  // Scan all other checks for rows matching any of the target identities
+  // Scan all other checks for rows matching any of the target identities.
+  //
+  // Known limitation (T-672, accepted — not fixed): a sibling row's dedupe
+  // key is `${matched.kind}:${matched.key}` — the KIND it happened to match
+  // on, not a canonical per-person key. If two different sibling checks
+  // reference the same associate, one via an id-bearing row and another via
+  // a name-only row, that associate gets TWO entries in crossCheckRows (one
+  // per kind) instead of one merged entry. This never merges data across
+  // different people (the keys are still exact-match), it just occasionally
+  // splits one person's cross-check data into two list entries under the
+  // same display name — a display quirk, not a fabrication risk.
   const otherResults = allResults.filter((r) => r.checkId !== targetResult.checkId);
 
   const crossCheckMap = new Map<string, CrossCheckEmployee>();

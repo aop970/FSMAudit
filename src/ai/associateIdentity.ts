@@ -112,6 +112,30 @@ export function rowMatchesIdentity(row: Record<string, unknown>, identity: Assoc
 }
 
 /**
+ * Extract BOTH an id-key and a name-key from a row when available — unlike
+ * extractRowIdentity, this is NOT exclusive-preferred. Used for building the
+ * cross-check bundle's target match sets (T-672): once check03 started
+ * emitting associateId alongside its display name, extractRowIdentity would
+ * resolve that row as kind:'id' ONLY, silently dropping the row's name as a
+ * candidate match key. That broke cross-check correlation against sibling
+ * checks (check17, check18, ...) that still only ever emit a name — the
+ * same person, but no shared key type. Callers that need "does this row
+ * belong to the same associate as that flagged row, by whatever identity
+ * either side has" should collect keys with this function, not
+ * extractRowIdentity.
+ */
+export function extractRowMatchKeys(row: Record<string, unknown>): { idKey: string | null; nameKey: string | null; displayName: string } {
+  const id = firstStringField(row, ID_FIELD_CANDIDATES);
+  const name = firstStringField(row, NAME_FIELD_CANDIDATES);
+  const nameKey = name && !SYNTHETIC_NAME_RE.test(name) ? normName(name) : null;
+  return {
+    idKey: id ? normId(id) : null,
+    nameKey,
+    displayName: name || id,
+  };
+}
+
+/**
  * Given a target set of identities (as normalized key sets, one per kind),
  * test a row for membership and return the matching identity's kind/key/
  * displayName drawn from the ROW itself (not the target set) so cross-check

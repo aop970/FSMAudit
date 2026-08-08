@@ -2,7 +2,7 @@
 
 import type { CheckResult, ParsedData } from '../audit/types';
 import type { ContextBundle } from './contextBundle';
-import type { SourceSlice } from './sourceSlice';
+import type { SourceSlice, DatePivot } from './sourceSlice';
 
 // ── Shared system prompt ────────────────────────────────────────────────────
 
@@ -100,6 +100,36 @@ ${analysisBlocks}`;
 
 // ── Tier 2 — Sonnet Deep Dive prompt ───────────────────────────────────────
 
+/**
+ * Render one associate's DATE-LEVEL VARIANCE pivot (T-672) — Allan asked for
+ * this specifically: "Tom Johnson had 8 hours on invoice on Jan 1 but only
+ * 6.5 hours on punch report for Jan 1." Dates are pre-ranked by variance
+ * (worst first) and pre-capped by sourceSlice.ts; this only formats them.
+ */
+function renderDatePivot(pivot: DatePivot): string {
+  const fmtHours = (v: number | null) => (v === null ? '—' : `${v.toFixed(2)}h`);
+
+  const header = pivot.omittedDateCount > 0
+    ? `DATE-LEVEL VARIANCE (${pivot.dates.length} of ${pivot.totalDatesFound} dates with data shown, ranked by largest variance — ${pivot.omittedDateCount} additional date(s) omitted, treat those as unverified at the date level):`
+    : `DATE-LEVEL VARIANCE (all ${pivot.dates.length} date${pivot.dates.length === 1 ? '' : 's'} with data):`;
+
+  // "—" means no rows were found for that leg on that date — distinct from
+  // rows totaling zero hours. The model must not read "—" as "0 hours."
+  const legend = '  ("—" = no rows found for that leg on that date, not zero hours)';
+
+  const shiftNote = pivot.shiftDateAttributable
+    ? ''
+    : "\n  Shift is NOT broken out by date here — this run's shift report has no usable per-date column, so shift hours are only available as a PERIOD TOTAL (see the Shift Detail rows below, if any). Do not state or infer a per-date shift figure.";
+
+  const lines = pivot.dates.map((e) => {
+    const shiftPart = pivot.shiftDateAttributable ? ` | Shift ${fmtHours(e.shiftHours)}` : '';
+    const otherPart = e.otherPunchCategories ? ` | also this date (excluded from Punch above): ${e.otherPunchCategories}` : '';
+    return `  ${e.date}: Invoice ${fmtHours(e.invoiceHours)} | Punch ${fmtHours(e.punchHours)}${shiftPart}${otherPart}`;
+  }).join('\n');
+
+  return `${header}\n${legend}${shiftNote}\n${lines}`;
+}
+
 /** Render the associate-scoped SOURCE DATA section — the fix for T-669. */
 function renderSourceSlice(slice: SourceSlice): string {
   if (slice.degradedReason) {
@@ -115,6 +145,7 @@ function renderSourceSlice(slice: SourceSlice): string {
 
   const blocks = slice.associates.map((a) => {
     const idSuffix = a.identity.kind === 'id' ? ` (${a.identity.key.toUpperCase()})` : '';
+    const datePivotText = a.datePivot ? `\n${renderDatePivot(a.datePivot)}\n` : '';
     if (a.groups.length === 0) {
       return `### ${a.identity.displayName}${idSuffix}\n  (no matching source rows found in any uploaded source file for this associate)`;
     }
@@ -124,7 +155,7 @@ function renderSourceSlice(slice: SourceSlice): string {
       const trimmedNote = g.trimmed > 0 ? `\n  ... ${g.trimmed} additional ${g.label} rows omitted` : '';
       return `  ${g.label}${shownOf}:\n${rowsText}${trimmedNote}`;
     }).join('\n\n');
-    return `### ${a.identity.displayName}${idSuffix}\n${groupText}`;
+    return `### ${a.identity.displayName}${idSuffix}${datePivotText}\n${groupText}`;
   }).join('\n\n');
 
   return `SOURCE DATA:\n${header}\n\n${blocks}`;
@@ -161,11 +192,12 @@ Your job is to root-cause the discrepancy from the SOURCE DATA above, not just r
 - Identify whether the discrepancy looks like (a) a DATA problem (e.g. the source file has rows in a category the check's logic doesn't handle, a missing/duplicate row), (b) a RULE problem (the check's own filter or tolerance is wrong for this case), or (c) a GENUINE finding (the source data itself shows a real timekeeping/billing discrepancy).
 - If associates were omitted from the source data (see the SOURCE DATA header), say so explicitly rather than treating them as unverified — do not invent numbers for them.
 - If SOURCE DATA says no data is available (degraded/empty), say so plainly and root-cause from the flagged rows and rule text only — do not claim to have compared source rows you were not given.
-- IMPORTANT — absence of a source file's rows under an associate does NOT mean that associate is missing from that file. Source rows are matched to the associate by NAME, while the check itself may have reconciled them by associate ID, so a name spelled differently between files (middle initial, suffix, married/maiden name, extra spacing) yields no rows here even though the file does contain them. If an associate's flagged row reports non-zero hours from a source you were given no rows for, treat that as an UNVERIFIED name-matching gap and say so — never conclude the associate is absent from that file, and never report a missing-punch/missing-shift root cause on that basis alone.
+- IMPORTANT — absence of a source file's rows under an associate does NOT mean that associate is missing from that file. Source rows are matched to the associate by NAME, while the check itself may have reconciled them by associate ID, so a name spelled differently between files (middle initial, suffix, married/maiden name, extra spacing) yields no rows here even though the file does contain them. If an associate's flagged row reports non-zero hours from a source you were given no rows for, treat that as an UNVERIFIED name-matching gap and say so — never conclude the associate is absent from that file, and never report a missing-punch/missing-shift root cause on that basis alone. This risk does NOT apply when the associate's heading above shows an ID in parentheses — that source data was matched by associate ID, which does not depend on name spelling, so an absent source group there is a genuine absence, not a matching gap.
+- DATE-LEVEL VARIANCE: when an associate's block includes a "DATE-LEVEL VARIANCE" section, use it to name the SPECIFIC DATE(S) that drive their variance — not just the period total. Quote the date and the invoice/punch(/shift) hours on that date directly from the pivot; do not average or estimate across dates. A "—" in the pivot means no rows were found for that leg on that date (never read it as zero hours). If the pivot's shift note says shift is period-level only, do not state or imply a per-date shift figure — say the shift comparison is period-level for that associate.
 
 Provide a deep dive analysis in this format:
 1. [emoji] ${result.checkName} — [one-line summary with key numbers]
-2. Named employee attribution: for each employee involved, name them, quantify their specific contribution (hours, dollars, row count), and state whether their source rows support a data problem, a rule problem, or a genuine finding
+2. Named employee attribution: for each employee involved, name them, quantify their specific contribution (hours, dollars, row count), state whether their source rows support a data problem, a rule problem, or a genuine finding, and name the specific date(s) driving it when a DATE-LEVEL VARIANCE section is available
 3. Optional breakdown table (employee | issue | amount/hours | % of total) if 3+ employees are involved
 4. Cross-check correlation: call out any patterns visible across other checks for these same employees
 5. Root Cause Identified: a specific, confident root cause hypothesis grounded in the source data comparison above — not a restatement of the check's own stats line

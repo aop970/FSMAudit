@@ -79,6 +79,13 @@ export interface ShiftRow {
   associateId: string;
   employeeName: string;
   actualMinutes: number;
+  /** Visit date (T-672 — date-level variance sourcing). Null when the shift
+   *  report has no date column (older exports) OR when a date column exists
+   *  but this particular row's cell is unparseable — callers must treat a
+   *  null visitDate anywhere in shiftRows as "this run's shift data is not
+   *  date-attributable" and degrade to period-level totals; never infer a
+   *  per-date shift figure from a period total. */
+  visitDate: Date | null;
 }
 
 export interface SesPunchRow {
@@ -88,6 +95,16 @@ export interface SesPunchRow {
   timeHours: number;
   payrollTag?: string;
   timeType?: string;
+  /** Punch date, from the "Date In" column (T-672). Null for older punch
+   *  exports that don't carry a date column — the field is optional in
+   *  practice (via the null value, not via `?:`, matching LaborRow's
+   *  visitDate convention) so nothing downstream requires it. */
+  visitDate: Date | null;
+  /** Near-free capture alongside visitDate — raw strings, no parsing. Not
+   *  used by any date-level logic yet; captured so a future "which punch"
+   *  (not just "which day") feature doesn't need another parser change. */
+  timeIn?: string;
+  timeOut?: string;
 }
 
 export interface OtApprovalRow {
