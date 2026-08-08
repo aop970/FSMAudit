@@ -117,14 +117,31 @@ function renderDatePivot(pivot: DatePivot): string {
   // rows totaling zero hours. The model must not read "—" as "0 hours."
   const legend = '  ("—" = no rows found for that leg on that date, not zero hours)';
 
-  const shiftNote = pivot.shiftDateAttributable
+  // A leg whose source file carries no usable date column is SUPPRESSED from
+  // the per-date lines and disclosed here instead. Rendering it as "—" would
+  // be read as "no rows found on this date" for every date in the period —
+  // a fabricated missing-source finding built out of a parsing artifact.
+  // (Vera, T-672 review — T-672 shipped this for shift only.)
+  const periodOnly: string[] = [];
+  if (!pivot.attributable.invoice) periodOnly.push('Invoice');
+  if (!pivot.attributable.punch) periodOnly.push('Punch');
+  if (!pivot.attributable.shift) periodOnly.push('Shift');
+  const shiftNote = periodOnly.length === 0
     ? ''
-    : "\n  Shift is NOT broken out by date here — this run's shift report has no usable per-date column, so shift hours are only available as a PERIOD TOTAL (see the Shift Detail rows below, if any). Do not state or infer a per-date shift figure.";
+    : `\n  ${periodOnly.join(' and ')} ${periodOnly.length === 1 ? 'is' : 'are'} NOT broken out by date here — that source file in this run has no usable per-date column, so its hours are only available as a PERIOD TOTAL (see the detail rows below, if any). Do not state or infer a per-date figure for ${periodOnly.length === 1 ? 'it' : 'them'}, and do NOT treat its absence from these lines as missing rows.`;
 
   const lines = pivot.dates.map((e) => {
-    const shiftPart = pivot.shiftDateAttributable ? ` | Shift ${fmtHours(e.shiftHours)}` : '';
     const otherPart = e.otherPunchCategories ? ` | also this date (excluded from Punch above): ${e.otherPunchCategories}` : '';
-    return `  ${e.date}: Invoice ${fmtHours(e.invoiceHours)} | Punch ${fmtHours(e.punchHours)}${shiftPart}${otherPart}`;
+    // Zero-signal date: no rows on ANY date-attributable leg. Say so in words
+    // rather than printing a row of em-dashes that reads as a variance driver.
+    if (e.noReconcilableHours) {
+      return `  ${e.date}: no Work hours on any source this date (NOT a variance driver — nothing to reconcile)${otherPart}`;
+    }
+    const invPart = pivot.attributable.invoice ? `Invoice ${fmtHours(e.invoiceHours)}` : null;
+    const pchPart = pivot.attributable.punch ? `Punch ${fmtHours(e.punchHours)}` : null;
+    const sftPart = pivot.attributable.shift ? `Shift ${fmtHours(e.shiftHours)}` : null;
+    const legs = [invPart, pchPart, sftPart].filter((p): p is string => p !== null).join(' | ');
+    return `  ${e.date}: ${legs}${otherPart}`;
   }).join('\n');
 
   return `${header}\n${legend}${shiftNote}\n${lines}`;

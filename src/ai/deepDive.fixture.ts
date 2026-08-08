@@ -718,7 +718,14 @@ assert('Jan 1 entry\'s shiftHours is null — never fabricated from the period t
 const taraPrompt = buildDeepDivePrompt(taraCheck, buildContextBundle(taraCheck, [taraCheck], 'rule text'), taraSlice);
 assert(
   'the prompt explicitly states shift is period-level only for this associate — never implies a per-date figure',
-  /Shift is NOT broken out by date here/.test(taraPrompt) && /Do not state or infer a per-date shift figure/.test(taraPrompt),
+  /Shift is NOT broken out by date here/.test(taraPrompt) && /Do not state or infer a per-date figure/.test(taraPrompt),
+);
+// Vera, T-672 review: the note must ALSO forbid reading the suppressed leg's
+// absence from the per-date lines as "that source has no rows" — the exact
+// fabricated missing-source finding the suppression exists to prevent.
+assert(
+  'the period-level note forbids reading the suppressed leg\'s absence as missing rows (Vera, T-672 review)',
+  /do NOT treat its absence from these lines as missing rows/.test(taraPrompt),
 );
 assert(
   'the per-date lines do NOT print a fabricated shift number (no "| Shift" suffix when shiftDateAttributable is false)',
@@ -775,6 +782,138 @@ assert(
   'the rendered prompt discloses the omitted-dates count for this associate',
   umaPrompt.includes(`${MANY_DATES_COUNT - MAX_DATES_PER_ASSOCIATE_PIVOT} additional date(s) omitted`),
 );
+
+// ── Scenario E (Vera, T-672 review): symmetric date-attributability ──────────
+//
+// T-672 guarded the SHIFT leg only. On an older punch export with no "Date In"
+// column, every pivot line rendered `Punch —`, which the legend defines as
+// "no rows found for that leg on that date" — so a model told to name the
+// dates driving a variance reads a parsing artifact as "punch rows missing on
+// every date" and reports a fabricated missing-punch finding to Allan, who
+// may take it to the client. Reproduced before the fix on both the punch and
+// invoice legs. Guard is now symmetric across all three legs.
+
+console.log('\nDate-level pivot — punch/invoice date-attributability is symmetric with shift (Vera, T-672 review)');
+
+const datelessPunchParsed = emptyParsedData();
+datelessPunchParsed.fsmIRows = [
+  invoiceRow('V1', 'Vera Case', 8.00, 'Work', d(2026, 1, 1)),
+  invoiceRow('V1', 'Vera Case', 8.00, 'Work', d(2026, 1, 2)),
+];
+// Older punch export shape: real hours, but no Date In column → visitDate null.
+datelessPunchParsed.sesPunchRows = [
+  punchRow('V1', 'Vera Case', 6.00, 'Work'),
+  punchRow('V1', 'Vera Case', 6.00, 'Work'),
+];
+datelessPunchParsed.shiftRows = [
+  shiftRow('V1', 'Vera Case', 7.00, d(2026, 1, 1)),
+  shiftRow('V1', 'Vera Case', 7.00, d(2026, 1, 2)),
+];
+
+const datelessPunchCheck: CheckResult = {
+  checkId: 3,
+  checkName: 'Three-Way Punch Recon',
+  status: 'fail',
+  stats: 'Variance exceeds 2h tolerance',
+  flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('V1', 'Vera Case', 16.00, 12.00)],
+};
+
+const datelessPunchSlice = buildAssociateSourceSlice(datelessPunchCheck, datelessPunchParsed);
+const veraEntry = datelessPunchSlice.associates.find((a) => a.identity.displayName === 'Vera Case');
+const datelessPunchPrompt = buildDeepDivePrompt(
+  datelessPunchCheck, buildContextBundle(datelessPunchCheck, [datelessPunchCheck], 'rule text'), datelessPunchSlice);
+
+assert('punch leg is correctly marked NOT date-attributable (no Date In column)', veraEntry?.datePivot?.attributable.punch === false);
+assert('invoice and shift legs ARE date-attributable in the same run', veraEntry?.datePivot?.attributable.invoice === true && veraEntry?.datePivot?.attributable.shift === true);
+assert(
+  'BUG FIXED: the per-date lines no longer render "Punch —" on every date (that read as "punch missing on every date")',
+  !/Punch —/.test(datelessPunchPrompt),
+  datelessPunchPrompt.slice(datelessPunchPrompt.indexOf('DATE-LEVEL VARIANCE'), datelessPunchPrompt.indexOf('DATE-LEVEL VARIANCE') + 400),
+);
+assert('the dateless punch leg is disclosed as period-level in the note', /Punch is NOT broken out by date here/.test(datelessPunchPrompt));
+assert('the remaining dated legs still render their real per-date numbers', /2026-01-01: Invoice 8\.00h \| Shift 7\.00h/.test(datelessPunchPrompt));
+assert(
+  'the period-level punch rows are still present elsewhere in the prompt (leg suppressed from the pivot, not dropped from the prompt)',
+  datelessPunchPrompt.includes('SES Punch Detail'),
+);
+
+// Fewer than two dated legs = no per-date variance is expressible. Fall back to
+// period-level source groups rather than rendering one column beside em-dashes.
+const oneLegParsed = emptyParsedData();
+oneLegParsed.fsmIRows = [invoiceRow('V2', 'Solo Leg', 8.00, 'Work', d(2026, 1, 1))];
+oneLegParsed.sesPunchRows = [punchRow('V2', 'Solo Leg', 6.00, 'Work')];
+oneLegParsed.shiftRows = [shiftRow('V2', 'Solo Leg', 40.00)];
+const oneLegCheck: CheckResult = {
+  checkId: 3, checkName: 'Three-Way Punch Recon', status: 'fail', stats: 'x', flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('V2', 'Solo Leg', 8.00, 6.00)],
+};
+const oneLegSlice = buildAssociateSourceSlice(oneLegCheck, oneLegParsed);
+assert(
+  'only ONE dated leg → no date pivot at all (a one-column pivot cannot show a variance)',
+  oneLegSlice.associates.find((a) => a.identity.displayName === 'Solo Leg')?.datePivot === null,
+);
+
+// ── Scenario F (Vera, T-672 review): zero-signal dates are not variance drivers ──
+//
+// Found on Allan's real SES files. Flora Fabbricatore's real variance is driven
+// by 2026-07-01 ALONE (invoice 7.47 / punch 7.47 / shift absent = 7.47 of her
+// 7.48h total). 2026-07-02 has NO Work hours on any leg — it exists in the
+// pivot only because an overnight Travel punch created the date bucket. T-672
+// rendered it as `Invoice — | Punch — | Shift —`, and that row of em-dashes was
+// misread during this very review as a second missing-shift day. It now says so
+// in words. The Travel context is preserved, since that is what explains the day.
+
+console.log('\nDate-level pivot — a date with no Work hours on any leg is not presented as a variance driver (Vera, T-672 review)');
+
+const travelOnlyParsed = emptyParsedData();
+travelOnlyParsed.fsmIRows = [
+  invoiceRow('F1', 'Flo Case', 7.47, 'Work', d(2026, 7, 1)),
+  invoiceRow('F1', 'Flo Case', 8.40, 'Travel', d(2026, 7, 1)),
+  invoiceRow('F1', 'Flo Case', 1.30, 'Travel', d(2026, 7, 2)),   // overnight travel spills to the next day
+];
+travelOnlyParsed.sesPunchRows = [
+  punchRow('F1', 'Flo Case', 7.47, 'Work', d(2026, 7, 1)),
+  punchRow('F1', 'Flo Case', 8.40, 'Travel', d(2026, 7, 1)),
+  punchRow('F1', 'Flo Case', 1.30, 'Travel', d(2026, 7, 2)),
+];
+travelOnlyParsed.shiftRows = [shiftRow('F1', 'Flo Case', 0, d(2026, 7, 3))]; // keeps shift date-attributable; none on 7/1 or 7/2
+
+const travelOnlyCheck: CheckResult = {
+  checkId: 3, checkName: 'Three-Way Punch Recon', status: 'fail', stats: 'x', flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('F1', 'Flo Case', 7.47, 7.47)],
+};
+const travelOnlySlice = buildAssociateSourceSlice(travelOnlyCheck, travelOnlyParsed);
+const floEntry = travelOnlySlice.associates.find((a) => a.identity.displayName === 'Flo Case');
+const jul1 = floEntry?.datePivot?.dates.find((e) => e.date === '2026-07-01');
+const jul2 = floEntry?.datePivot?.dates.find((e) => e.date === '2026-07-02');
+const travelOnlyPrompt = buildDeepDivePrompt(
+  travelOnlyCheck, buildContextBundle(travelOnlyCheck, [travelOnlyCheck], 'rule text'), travelOnlySlice);
+
+assert('7/1 is the real variance driver — invoice 7.47 / punch 7.47 / shift absent', jul1?.invoiceHours === 7.47 && jul1?.punchHours === 7.47 && jul1?.shiftHours === null);
+assert('7/1 is NOT flagged as zero-signal — it has real Work hours', jul1?.noReconcilableHours === false);
+assert('7/1 ranks FIRST (largest variance)', floEntry?.datePivot?.dates[0]?.date === '2026-07-01');
+assert('7/2 has NO Work hours on any leg — flagged zero-signal', jul2?.noReconcilableHours === true);
+assert('7/2 carries zero variance — it can never outrank a real driver', jul2?.variance === 0);
+assert('7/2 still preserves the Travel context that explains the day', (jul2?.otherPunchCategories ?? '').includes('Travel 1.30h'));
+assert(
+  'BUG FIXED: 7/2 no longer renders as a row of em-dashes that reads as a missing-source day',
+  !/2026-07-02: Invoice — \| Punch — \| Shift —/.test(travelOnlyPrompt),
+);
+assert(
+  '7/2 states in words that it is not a variance driver',
+  /2026-07-02: no Work hours on any source this date \(NOT a variance driver/.test(travelOnlyPrompt),
+  travelOnlyPrompt.slice(travelOnlyPrompt.indexOf('DATE-LEVEL VARIANCE'), travelOnlyPrompt.indexOf('DATE-LEVEL VARIANCE') + 500),
+);
+assert(
+  '7/1 still renders its real numbers unchanged',
+  /2026-07-01: Invoice 7\.47h \| Punch 7\.47h \| Shift —/.test(travelOnlyPrompt),
+);
+
+console.log('\n--- Vera T-672 review: DATE-LEVEL VARIANCE with a zero-signal date (excerpt) ---');
+const floIdx = travelOnlyPrompt.indexOf('DATE-LEVEL VARIANCE');
+console.log(travelOnlyPrompt.slice(floIdx, floIdx + 500));
+console.log('--- end excerpt ---\n');
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

@@ -61,11 +61,43 @@ export interface DatePivotEntry {
   otherPunchCategories: string | null;
   /** Ranking signal — max pairwise |diff| among the legs that have data this date. */
   variance: number;
+  /**
+   * True when NONE of the date-attributable legs has any row this date — the
+   * entry exists only because a non-Work punch category (Travel, Training, …)
+   * created the date bucket. Carries zero reconciliation signal (variance is
+   * always 0), but rendering it as `Invoice — | Punch — | Shift —` invites
+   * exactly the misread it caused during this review: three em-dashes read as
+   * "all three sources are missing on this date," i.e. a variance driver, when
+   * the truth is "this associate simply had no Work hours that day."
+   * renderDatePivot states that in words instead (Vera, T-672 review).
+   */
+  noReconcilableHours: boolean;
+}
+
+/**
+ * Per-run, per-source "does this leg carry usable dates at all" flags (Vera,
+ * T-672 review). T-672 shipped this guard for shift ONLY. That asymmetry is a
+ * fabrication risk: on an older punch export with no "Date In" column, every
+ * pivot line renders `Punch —`, which the legend defines as "no rows found for
+ * that leg on that date" — so a model told to name the dates driving a
+ * variance reads a parsing artifact as "this associate's punch rows are
+ * missing on every single date" and reports a fabricated missing-punch
+ * finding. Same for a dateless invoice. Reproduced against both legs before
+ * the fix; a leg that isn't date-attributable is now suppressed from the
+ * per-date lines entirely and disclosed in a note, exactly as shift already
+ * was.
+ */
+export interface DateAttributability {
+  invoice: boolean;
+  punch: boolean;
+  shift: boolean;
 }
 
 export interface DatePivot {
   /** Whether THIS run's shift data carries per-date rows at all. False = every ShiftRow.visitDate in this run's ParsedData is null (older export). */
   shiftDateAttributable: boolean;
+  /** Per-leg date-attributability for this run (see DateAttributability). `shift` mirrors shiftDateAttributable. */
+  attributable: DateAttributability;
   /** Ranked by |variance| desc, capped at MAX_DATES_PER_ASSOCIATE_PIVOT. */
   dates: DatePivotEntry[];
   totalDatesFound: number;
@@ -211,10 +243,24 @@ function newDateAccumEntry(): DateAccumEntry {
  * SourceGroup rows in that case, so no information is lost, just not
  * date-bucketed.
  */
-function buildDatePivot(pd: ParsedData, identity: AssociateIdentity, shiftDateAttributable: boolean): DatePivot | null {
-  const laborRows = ([...pd.fsmIRows, ...pd.fsmIIRows, ...pd.fsmIMeritRows, ...pd.fsmIIMeritRows] as unknown as Record<string, unknown>[])
-    .filter((r) => rowMatchesIdentity(r, identity)) as unknown as LaborRow[];
-  const punchRowsForAssoc = pd.sesPunchRows.filter((r) => rowMatchesIdentity(r as unknown as Record<string, unknown>, identity));
+function buildDatePivot(pd: ParsedData, identity: AssociateIdentity, attributable: DateAttributability): DatePivot | null {
+  const shiftDateAttributable = attributable.shift;
+
+  // A per-date pivot only means something if at least TWO legs can be placed
+  // on dates — one dated leg on its own can't show a per-date variance, and
+  // rendering it next to two columns of em-dashes is precisely the fabricated
+  // "missing on every date" reading this guard exists to prevent. Fall back to
+  // the period-level SourceGroup rows instead; no information is lost.
+  const attributableLegs = [attributable.invoice, attributable.punch, attributable.shift].filter(Boolean).length;
+  if (attributableLegs < 2) return null;
+
+  const laborRows = attributable.invoice
+    ? (([...pd.fsmIRows, ...pd.fsmIIRows, ...pd.fsmIMeritRows, ...pd.fsmIIMeritRows] as unknown as Record<string, unknown>[])
+        .filter((r) => rowMatchesIdentity(r, identity)) as unknown as LaborRow[])
+    : [];
+  const punchRowsForAssoc = attributable.punch
+    ? pd.sesPunchRows.filter((r) => rowMatchesIdentity(r as unknown as Record<string, unknown>, identity))
+    : [];
   const shiftRowsForAssoc = shiftDateAttributable
     ? pd.shiftRows.filter((r) => rowMatchesIdentity(r as unknown as Record<string, unknown>, identity))
     : [];
@@ -269,16 +315,18 @@ function buildDatePivot(pd: ParsedData, identity: AssociateIdentity, shiftDateAt
     // value (which stays null so "no rows this date" reads distinctly from
     // "rows totaling zero hours this date").
     const pairs: number[] = [];
-    if (inv !== null || pch !== null) pairs.push(Math.abs((inv ?? 0) - (pch ?? 0)));
-    if (shiftDateAttributable && (inv !== null || sft !== null)) pairs.push(Math.abs((inv ?? 0) - (sft ?? 0)));
-    if (shiftDateAttributable && (pch !== null || sft !== null)) pairs.push(Math.abs((pch ?? 0) - (sft ?? 0)));
+    if (attributable.invoice && attributable.punch && (inv !== null || pch !== null)) pairs.push(Math.abs((inv ?? 0) - (pch ?? 0)));
+    if (attributable.invoice && shiftDateAttributable && (inv !== null || sft !== null)) pairs.push(Math.abs((inv ?? 0) - (sft ?? 0)));
+    if (attributable.punch && shiftDateAttributable && (pch !== null || sft !== null)) pairs.push(Math.abs((pch ?? 0) - (sft ?? 0)));
     const variance = pairs.length > 0 ? Math.max(...pairs) : 0;
 
     const otherPunchCategories = e.otherCats.size > 0
       ? [...e.otherCats.entries()].map(([cat, hrs]) => `${cat} ${hrs.toFixed(2)}h`).join(', ')
       : null;
 
-    return { date, invoiceHours: inv, punchHours: pch, shiftHours: sft, otherPunchCategories, variance };
+    const noReconcilableHours = inv === null && pch === null && sft === null;
+
+    return { date, invoiceHours: inv, punchHours: pch, shiftHours: sft, otherPunchCategories, variance, noReconcilableHours };
   });
 
   entries.sort((a, b) => b.variance - a.variance || a.date.localeCompare(b.date));
@@ -288,6 +336,7 @@ function buildDatePivot(pd: ParsedData, identity: AssociateIdentity, shiftDateAt
 
   return {
     shiftDateAttributable,
+    attributable,
     dates: capped,
     totalDatesFound,
     omittedDateCount: totalDatesFound - capped.length,
@@ -369,17 +418,26 @@ export function buildAssociateSourceSlice(
   const omittedCount = totalCandidates - capped.length;
   const ci = isCiParsedData(parsedData);
 
-  // T-672: computed once per run, not per associate — reflects whether the
-  // shift REPORT itself carries dates at all (older exports may not). When
-  // false, buildDatePivot never touches shiftRows and the prompt states
-  // shift is period-level only, rather than fabricating a per-date figure.
-  const shiftDateAttributable = !ci && parsedData.shiftRows.some((r) => r.visitDate != null);
+  // T-672: computed once per run, not per associate — reflects whether each
+  // SOURCE FILE itself carries dates at all (older exports may not). When a
+  // leg is false, buildDatePivot never touches its rows and the prompt states
+  // that leg is period-level only, rather than rendering an em-dash a model
+  // would read as "no rows on this date" (Vera, T-672 review — T-672 shipped
+  // this guard for shift only; invoice and punch had the same exposure).
+  const attributable: DateAttributability = ci
+    ? { invoice: false, punch: false, shift: false }
+    : {
+        invoice: [...parsedData.fsmIRows, ...parsedData.fsmIIRows, ...parsedData.fsmIMeritRows, ...parsedData.fsmIIMeritRows]
+          .some((r) => r.visitDate != null),
+        punch: parsedData.sesPunchRows.some((r) => r.visitDate != null),
+        shift: parsedData.shiftRows.some((r) => r.visitDate != null),
+      };
 
   const associates: AssociateSource[] = capped.map(({ identity, severity }) => ({
     identity,
     severity,
     groups: ci ? buildCiSourceGroups(parsedData, identity) : buildFsmSesSourceGroups(parsedData, identity),
-    datePivot: ci ? null : buildDatePivot(parsedData, identity, shiftDateAttributable),
+    datePivot: ci ? null : buildDatePivot(parsedData, identity, attributable),
   }));
 
   return { associates, totalCandidates, omittedCount, degradedReason: null };
