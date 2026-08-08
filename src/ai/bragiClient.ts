@@ -3,9 +3,10 @@
 // Synthesis: Sonnet (assembles full report from all Haiku outputs)
 // Tier 2: Sonnet Deep Dive on demand (full context bundle per check)
 
-import type { CheckResult, ParsedData } from '../audit/types';
+import type { CheckResult, ParsedData, CiParsedData } from '../audit/types';
 import { getAuditRules } from '../audit/auditRules';
 import { buildContextBundle } from './contextBundle';
+import { buildAssociateSourceSlice } from './sourceSlice';
 import { buildSystemPrompt, buildHaikuPrompt, buildSynthesisPrompt, buildDeepDivePrompt } from './promptTemplates';
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
@@ -13,7 +14,15 @@ const SONNET_MODEL = 'claude-sonnet-4-6';
 
 const HAIKU_MAX_TOKENS = 800;
 const SYNTHESIS_MAX_TOKENS = 4000;
-const DEEP_DIVE_MAX_TOKENS = 2000;
+// T-669: Deep Dive now carries per-associate source rows (punch/labor/shift/etc.),
+// not just the flagged-row summary — bumped from 2000 to give the model room to
+// actually reason about the comparison instead of truncating mid-analysis.
+const DEEP_DIVE_MAX_TOKENS = 2500;
+
+// Claude Sonnet 4.6 list pricing ($/million tokens) — used only for the UI cost
+// estimate shown before a Deep Dive call. Keep in sync with SONNET_MODEL above.
+const SONNET_INPUT_PER_M = 3.0;
+const SONNET_OUTPUT_PER_M = 15.0;
 
 const API_HEADERS = {
   'anthropic-version': '2023-06-01',
@@ -178,6 +187,7 @@ export async function runDeepDive(
   apiKey: string,
   targetResult: CheckResult,
   allResults: CheckResult[],
+  parsedData: ParsedData | CiParsedData | null,
   program: 'fsm' | 'ses' | 'ci' | undefined,
   onProgress: ProgressCallback,
 ): Promise<CallResult> {
@@ -187,7 +197,8 @@ export async function runDeepDive(
   onProgress(`Running deep dive on ${targetResult.checkName}…`);
 
   const bundle = buildContextBundle(targetResult, allResults, rules.bragiSystemPrompt);
-  const userPrompt = buildDeepDivePrompt(targetResult, bundle);
+  const sourceSlice = buildAssociateSourceSlice(targetResult, parsedData);
+  const userPrompt = buildDeepDivePrompt(targetResult, bundle, sourceSlice);
 
   return callClaude(
     apiKey,
@@ -196,6 +207,39 @@ export async function runDeepDive(
     systemBlocks,
     userPrompt,
   );
+}
+
+/**
+ * Estimate input tokens for a Deep Dive call by actually building the real
+ * prompt (source slice, cross-check bundle, everything) and counting
+ * characters. Needed because the source slice can now be much larger than
+ * the old flaggedRows-only estimate — Allan must see the real cost before
+ * clicking, not the pre-T-669 20-row estimate.
+ */
+export function estimateDeepDiveTokens(
+  result: CheckResult,
+  allResults: CheckResult[],
+  parsedData: ParsedData | CiParsedData | null,
+  program: 'fsm' | 'ses' | 'ci' | undefined,
+): number {
+  const rules = getAuditRules(program);
+  const bundle = buildContextBundle(result, allResults, rules.bragiSystemPrompt);
+  const sourceSlice = buildAssociateSourceSlice(result, parsedData);
+  const prompt = buildDeepDivePrompt(result, bundle, sourceSlice);
+  const charCount = prompt.length + rules.bragiSystemPrompt.length;
+  return Math.ceil(charCount / 4) + DEEP_DIVE_MAX_TOKENS;
+}
+
+export function estimateDeepDiveCost(
+  result: CheckResult,
+  allResults: CheckResult[],
+  parsedData: ParsedData | CiParsedData | null,
+  program: 'fsm' | 'ses' | 'ci' | undefined,
+): string {
+  const tokens = estimateDeepDiveTokens(result, allResults, parsedData, program);
+  const inputTokens = tokens - DEEP_DIVE_MAX_TOKENS;
+  const cost = (inputTokens * SONNET_INPUT_PER_M + DEEP_DIVE_MAX_TOKENS * SONNET_OUTPUT_PER_M) / 1_000_000;
+  return cost < 0.001 ? '<$0.001' : `~$${cost.toFixed(3)}`;
 }
 
 // ── Legacy single-check analyze (kept for CheckCard backward compat) ─────

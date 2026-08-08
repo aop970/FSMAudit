@@ -1,11 +1,13 @@
 // contextBundle.ts — Builds Tier 2 cross-check context bundles for Deep Dive calls
 
 import type { CheckResult } from '../audit/types';
+import { extractAssociateIdentities, matchRowAgainstIdentitySets } from './associateIdentity';
 
 const MAX_CROSS_ROWS_PER_EMPLOYEE = 20;
 
 export interface CrossCheckEmployee {
   employeeName: string;
+  /** Empty string when the identity was resolved by name only (no ID on any matching row). */
   associateId: string;
   rows: { checkId: number; checkName: string; row: Record<string, unknown> }[];
   trimmed: number; // how many rows were cut
@@ -20,30 +22,25 @@ export interface ContextBundle {
 
 /**
  * Build a Tier 2 context bundle for a specific check.
- * Collects all associateIds from the check's flagged rows, then
- * scans all OTHER check results for rows featuring those associates.
+ * Collects associate identities from the check's flagged rows (both
+ * ID-keyed and name-keyed — see associateIdentity.ts), then scans all OTHER
+ * check results for rows featuring those same associates.
+ *
+ * T-669: previously this only recognized associateId-keyed rows, so SES
+ * Check 3 (which emits a bare 'associate' NAME field, per
+ * check03_ses_threeWayRecon.ts) always produced associateIds.size === 0 and
+ * an empty bundle — Deep Dive on Check 3 always rendered "No cross-check
+ * data available" regardless of what other checks knew about the same
+ * associates.
  */
 export function buildContextBundle(
   targetResult: CheckResult,
   allResults: CheckResult[],
   ruleText: string,
 ): ContextBundle {
-  // Collect all associateId values from the target check's flagged rows
-  const associateIds = new Set<string>();
-  for (const row of targetResult.flaggedRows) {
-    // Support common field name variations
-    const id =
-      (row['associateId'] as string) ??
-      (row['Associate ID'] as string) ??
-      (row['associate_id'] as string) ??
-      (row['AssociateID'] as string) ??
-      '';
-    if (id && id.trim()) {
-      associateIds.add(id.trim());
-    }
-  }
+  const identities = extractAssociateIdentities(targetResult.flaggedRows);
 
-  if (associateIds.size === 0) {
+  if (identities.length === 0) {
     return {
       checkId: targetResult.checkId,
       checkName: targetResult.checkName,
@@ -52,39 +49,30 @@ export function buildContextBundle(
     };
   }
 
-  // Scan all other checks for rows with matching associateIds
+  const idKeys = new Set(identities.filter((i) => i.kind === 'id').map((i) => i.key));
+  const nameKeys = new Set(identities.filter((i) => i.kind === 'name').map((i) => i.key));
+
+  // Scan all other checks for rows matching any of the target identities
   const otherResults = allResults.filter((r) => r.checkId !== targetResult.checkId);
 
   const crossCheckMap = new Map<string, CrossCheckEmployee>();
 
   for (const result of otherResults) {
     for (const row of result.flaggedRows) {
-      const rowId =
-        (row['associateId'] as string) ??
-        (row['Associate ID'] as string) ??
-        (row['associate_id'] as string) ??
-        (row['AssociateID'] as string) ??
-        '';
+      const matched = matchRowAgainstIdentitySets(row, idKeys, nameKeys);
+      if (!matched) continue;
 
-      if (!rowId || !associateIds.has(rowId.trim())) continue;
-
-      const id = rowId.trim();
-      if (!crossCheckMap.has(id)) {
-        const employeeName =
-          (row['employeeName'] as string) ??
-          (row['Employee Name'] as string) ??
-          (row['employee_name'] as string) ??
-          (row['Name'] as string) ??
-          id;
-        crossCheckMap.set(id, {
-          employeeName,
-          associateId: id,
+      const dedupeKey = `${matched.kind}:${matched.key}`;
+      if (!crossCheckMap.has(dedupeKey)) {
+        crossCheckMap.set(dedupeKey, {
+          employeeName: matched.displayName,
+          associateId: matched.kind === 'id' ? matched.key : '',
           rows: [],
           trimmed: 0,
         });
       }
 
-      const entry = crossCheckMap.get(id)!;
+      const entry = crossCheckMap.get(dedupeKey)!;
       if (entry.rows.length < MAX_CROSS_ROWS_PER_EMPLOYEE) {
         entry.rows.push({
           checkId: result.checkId,

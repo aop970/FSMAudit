@@ -806,6 +806,7 @@ export default function App() {
                       program={program}
                       onTokensUsed={addTokens}
                       invoiceFileName={payload.invoiceFile}
+                      parsedData={parsedData}
                     />
                   ))}
                 </div>

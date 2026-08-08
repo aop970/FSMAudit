@@ -2,8 +2,8 @@ import React, { useState, useCallback } from 'react';
 import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, ZoomIn, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { CheckResult, CheckStatus } from '../audit/types';
-import { estimateCost, estimateTokens, analyzeCheck, runDeepDive } from '../ai/bragiClient';
+import type { CheckResult, CheckStatus, ParsedData, CiParsedData } from '../audit/types';
+import { estimateCost, estimateTokens, estimateDeepDiveCost, analyzeCheck, runDeepDive } from '../ai/bragiClient';
 import { loadVerdict, saveVerdict } from '../audit/check07Verdicts';
 import type { UserVerdict } from '../audit/check07Verdicts';
 import { exportCheck7 } from '../audit/check07Export';
@@ -19,6 +19,12 @@ interface CheckCardProps {
   externalAiOutput?: string;
   // Invoice file name — used for Check 7 export filename
   invoiceFileName?: string;
+  // Session-scoped source data (punch/labor/shift/roster/...) — held in App
+  // state, never persisted to /api/runs. Passed through only so Deep Dive
+  // can build an associate-scoped source-row slice (T-669). Session-only:
+  // this must never be forwarded into anything that gets POSTed as the
+  // audit payload.
+  parsedData?: ParsedData | CiParsedData | null;
 }
 
 const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label: string; icon: React.ReactNode }> = {
@@ -48,7 +54,7 @@ const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label
   },
 };
 
-export function CheckCard({ result, allResults, defaultOpen = false, apiKey, program, onTokensUsed, externalAiOutput, invoiceFileName }: CheckCardProps) {
+export function CheckCard({ result, allResults, defaultOpen = false, apiKey, program, onTokensUsed, externalAiOutput, invoiceFileName, parsedData }: CheckCardProps) {
   const [open, setOpen] = useState(defaultOpen);
   const [aiState, setAiState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [aiOutput, setAiOutput] = useState('');
@@ -101,10 +107,11 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   const costEst = showBragiButton ? estimateCost(result) : '';
   const tokenEst = showBragiButton ? estimateTokens(result) : 0;
 
-  // Only checks 3, 5, and 7 warrant the full Sonnet Deep Dive treatment.
-  // All other failed/warned checks receive Haiku analysis only.
-  const DEEP_DIVE_CHECKS = new Set([3, 5, 7]);
-  const showDeepDive = showBragiButton && DEEP_DIVE_CHECKS.has(result.checkId) && allResults && allResults.length > 0;
+  // T-669: Deep Dive is available on every failed/warned check, not just
+  // 3/5/7 — the old DEEP_DIVE_CHECKS allowlist gated it to a hardcoded set
+  // even though the source-slice builder works generically across checks.
+  const showDeepDive = showBragiButton && !!allResults && allResults.length > 0;
+  const deepDiveCostEst = showDeepDive ? estimateDeepDiveCost(result, allResults, parsedData ?? null, program) : '';
 
   async function handleAnalyze() {
     setAiState('loading');
@@ -129,6 +136,7 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
         apiKey,
         result,
         allResults,
+        parsedData ?? null,
         program,
         () => { /* progress handled inline */ },
       );
@@ -554,7 +562,9 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                 >
                   <ZoomIn className="h-3.5 w-3.5" />
                   Deep Dive
-                  <span className="ml-1 text-[10px] opacity-70">Sonnet · full context</span>
+                  <span className="ml-1 rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: 'rgba(255,186,8,0.2)' }}>
+                    Sonnet · source data · {deepDiveCostEst}
+                  </span>
                 </button>
               )}
 

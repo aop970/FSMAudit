@@ -2,6 +2,7 @@
 
 import type { CheckResult, ParsedData } from '../audit/types';
 import type { ContextBundle } from './contextBundle';
+import type { SourceSlice } from './sourceSlice';
 
 // ── Shared system prompt ────────────────────────────────────────────────────
 
@@ -97,12 +98,44 @@ ${analysisBlocks}`;
 
 // ── Tier 2 — Sonnet Deep Dive prompt ───────────────────────────────────────
 
-export function buildDeepDivePrompt(result: CheckResult, bundle: ContextBundle): string {
+/** Render the associate-scoped SOURCE DATA section — the fix for T-669. */
+function renderSourceSlice(slice: SourceSlice): string {
+  if (slice.degradedReason) {
+    return `SOURCE DATA: ${slice.degradedReason}`;
+  }
+  if (slice.associates.length === 0) {
+    return 'SOURCE DATA: No associate identity could be extracted from the flagged rows for this check — root-cause from the flagged rows and rule text only.';
+  }
+
+  const header = slice.omittedCount > 0
+    ? `Source rows below for the ${slice.associates.length} highest-severity associates of ${slice.totalCandidates} flagged (ranked by the largest variance/amount on their own flagged row). ${slice.omittedCount} additional associate(s) omitted — treat any statement about them as based on the check's summary output only, not source data.`
+    : `Source rows below for all ${slice.associates.length} flagged associate(s).`;
+
+  const blocks = slice.associates.map((a) => {
+    const idSuffix = a.identity.kind === 'id' ? ` (${a.identity.key.toUpperCase()})` : '';
+    if (a.groups.length === 0) {
+      return `### ${a.identity.displayName}${idSuffix}\n  (no matching source rows found in any uploaded source file for this associate)`;
+    }
+    const groupText = a.groups.map((g) => {
+      const rowsText = JSON.stringify(g.rows, null, 2);
+      const shownOf = g.trimmed > 0 ? ` (showing ${g.rows.length} of ${g.rows.length + g.trimmed})` : '';
+      const trimmedNote = g.trimmed > 0 ? `\n  ... ${g.trimmed} additional ${g.label} rows omitted` : '';
+      return `  ${g.label}${shownOf}:\n${rowsText}${trimmedNote}`;
+    }).join('\n\n');
+    return `### ${a.identity.displayName}${idSuffix}\n${groupText}`;
+  }).join('\n\n');
+
+  return `SOURCE DATA:\n${header}\n\n${blocks}`;
+}
+
+export function buildDeepDivePrompt(result: CheckResult, bundle: ContextBundle, sourceSlice: SourceSlice): string {
   const crossCheckSection = bundle.crossCheckRows.length > 0
     ? `CROSS-CHECK DATA (other checks where these employees appear):
-${bundle.crossCheckRows.map((e) => `Employee: ${e.employeeName} (${e.associateId})
+${bundle.crossCheckRows.map((e) => `Employee: ${e.employeeName}${e.associateId ? ` (${e.associateId})` : ''}
 ${e.rows.map((r) => `  - Check ${r.checkId} "${r.checkName}": ${JSON.stringify(r.row)}`).join('\n')}${e.trimmed ? `\n  ... (${e.trimmed} additional rows trimmed)` : ''}`).join('\n\n')}`
     : 'No cross-check data available for these employees.';
+
+  const sourceDataSection = renderSourceSlice(sourceSlice);
 
   return `Deep dive analysis requested for:
 
@@ -111,20 +144,28 @@ Status: ${result.status.toUpperCase()}
 Stats: ${result.stats}
 Flagged Count: ${result.flaggedCount}
 
-FULL FLAGGED ROWS:
+FULL FLAGGED ROWS (the check's conclusions — NOT the underlying source data):
 ${JSON.stringify(result.flaggedRows, null, 2)}
+
+${sourceDataSection}
 
 RELEVANT AUDIT RULE TEXT:
 ${bundle.ruleText}
 
 ${crossCheckSection}
 
+Your job is to root-cause the discrepancy from the SOURCE DATA above, not just restate the flagged rows. For each associate with source data:
+- Compare what the source rows actually contain (categories/time types present, e.g. Work vs Overtime vs Travel vs Admin) against what the check counted or excluded.
+- Identify whether the discrepancy looks like (a) a DATA problem (e.g. the source file has rows in a category the check's logic doesn't handle, a missing/duplicate row), (b) a RULE problem (the check's own filter or tolerance is wrong for this case), or (c) a GENUINE finding (the source data itself shows a real timekeeping/billing discrepancy).
+- If associates were omitted from the source data (see the SOURCE DATA header), say so explicitly rather than treating them as unverified — do not invent numbers for them.
+- If SOURCE DATA says no data is available (degraded/empty), say so plainly and root-cause from the flagged rows and rule text only — do not claim to have compared source rows you were not given.
+
 Provide a deep dive analysis in this format:
 1. [emoji] ${result.checkName} — [one-line summary with key numbers]
-2. Named employee attribution: for each employee involved, name them, quantify their specific contribution (hours, dollars, row count)
+2. Named employee attribution: for each employee involved, name them, quantify their specific contribution (hours, dollars, row count), and state whether their source rows support a data problem, a rule problem, or a genuine finding
 3. Optional breakdown table (employee | issue | amount/hours | % of total) if 3+ employees are involved
 4. Cross-check correlation: call out any patterns visible across other checks for these same employees
-5. Root Cause Identified: a specific, confident root cause hypothesis based on all available evidence
+5. Root Cause Identified: a specific, confident root cause hypothesis grounded in the source data comparison above — not a restatement of the check's own stats line
 
-Be direct. Name names. Give numbers. Do not hedge.`;
+Be direct. Name names. Give numbers. Do not hedge. Never claim to have examined data that was not provided to you.`;
 }
