@@ -32,8 +32,8 @@ import { checkSesPayrollTag } from './checks/checkSes_payrollTag.js';
 import { check18Holidays } from './checks/check18_holidays.js';
 import { runSesAudit } from './runSesAudit.js';
 import { applyNeverFailPolicy } from './neverFailPolicy.js';
-import { isAiEligible } from '../ai/aiGate.js';
-import type { LaborRow, SesPunchRow, ShiftRow, ParsedData, ControlTableEntry } from './types.js';
+import { isAiEligible, countAiEligible, shouldShowAnalyzeAll, MIN_AI_ELIGIBLE_FOR_ANALYZE_ALL } from '../ai/aiGate.js';
+import type { LaborRow, SesPunchRow, ShiftRow, ParsedData, ControlTableEntry, CheckResult } from './types.js';
 
 // ── Assertion plumbing ────────────────────────────────────────────────────────
 
@@ -68,7 +68,12 @@ function invoiceRow(associateId: string, employeeName: string, timeHours: number
     timeHours,
     basePayRate: 0,
     muValue: 0,
+    // muFormula/billFormula set so check02Formulas (Formula Compliance)
+    // doesn't incidentally fail these rows as "hardcoded" — T-671's
+    // full-run fixture needs its ONLY fail to be the one it's testing for.
+    muFormula: '=A1*0.3',
     billValue: 0,
+    billFormula: '=A1*1.3',
     loadedRate: 0,
     associateState: '',
     comments,
@@ -315,7 +320,13 @@ console.log('\nFull runSesAudit() — checkId uniqueness (T-670 core regression 
 
 function emptyParsedDataForSesRun(): ParsedData {
   return {
-    fileName: 'ses-test.xlsx', invoiceNumber: 'INV-TEST', e17Value: null, punchFileName: null,
+    // invoiceNumber: null (not 'INV-TEST') deliberately — a real string here
+    // that doesn't match tabNames[0]/fileName trips check10InvoiceIdentity
+    // into an UNRELATED fail (identity mismatch), which isn't what this
+    // fixture is testing. null routes it to Invoice Identity's 'warning'
+    // branch ("number not found") instead, keeping this run's only real
+    // fail the one under test (Store ID Format).
+    fileName: 'ses-test.xlsx', invoiceNumber: null, e17Value: null, punchFileName: null,
     fsmIRows: [wrongHoursHolidayRow, twentyTwentyCoRow, badStoreIdRow], fsmIIRows: [], fsmIMeritRows: [], fsmIIMeritRows: [],
     punchRows: [], mgmtRows: [], cloudRows: [], rosterEntries: [], otApprovalRows: [],
     tieOutData: null, declaredPeriod: null, weeksCovered: [1], crossTabNotes: [], tabNames: ['Detail'],
@@ -360,6 +371,56 @@ assert('Store ID Format still reads as fail in the full SES run (not on the neve
 assert(
   'OT Flag is pass or warning, never fail, in the full SES run (Bragi verified: no code change needed here)',
   otFlagInRun?.status === 'pass' || otFlagInRun?.status === 'warning',
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-671 — "Analyze All" must render on a single-FAIL run
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Allan's exact repro: a real SES run with the never-fail downgrades applied
+// has exactly ONE fail (Store ID Format — see above), and the old
+// ">= 2 eligible checks" threshold (written when eligibility meant
+// fail-or-warning, pre-T-670) made "Analyze All" vanish on that run. Fixed
+// by deriving both call sites (AnalyzeAllButton.tsx, App.tsx's sidebar
+// trigger) from one shared shouldShowAnalyzeAll() — tested directly here,
+// since both call sites now share the identical predicate and cannot diverge.
+
+console.log('\n"Analyze All" renders on a single-FAIL run (T-671)');
+
+const eligibleInFullRun = countAiEligible(fullSesRun.results);
+assertEq(
+  'the full SES run (post-never-fail-policy) has EXACTLY ONE AI-eligible (fail) check — this is Allan\'s exact repro',
+  eligibleInFullRun,
+  1,
+);
+assert(
+  'BUG (pre-T-671): the old ">= 2" threshold would have hidden Analyze All on this exact run',
+  eligibleInFullRun < 2,
+);
+assert(
+  'FIXED: shouldShowAnalyzeAll() renders true on the real single-FAIL orchestrator output',
+  shouldShowAnalyzeAll(fullSesRun.results) === true,
+);
+assertEq('MIN_AI_ELIGIBLE_FOR_ANALYZE_ALL is 1 (not 2)', MIN_AI_ELIGIBLE_FOR_ANALYZE_ALL, 1);
+
+// Synthetic case, spelled out explicitly per the task ask: exactly one fail
+// plus several pass/warning/na, asserted against the same shared predicate
+// both AnalyzeAllButton.tsx and App.tsx's sidebar trigger call.
+const singleFailMixedResults: CheckResult[] = [
+  { checkId: 1, checkName: 'A', status: 'pass', stats: '', flaggedCount: 0, flaggedRows: [] },
+  { checkId: 2, checkName: 'B', status: 'warning', stats: '', flaggedCount: 1, flaggedRows: [{}] },
+  { checkId: 3, checkName: 'C', status: 'na', stats: '', flaggedCount: 0, flaggedRows: [] },
+  { checkId: 4, checkName: 'D', status: 'fail', stats: '', flaggedCount: 1, flaggedRows: [{}] },
+  { checkId: 5, checkName: 'E', status: 'warning', stats: '', flaggedCount: 1, flaggedRows: [{}] },
+];
+assertEq('synthetic mix has exactly one AI-eligible check', countAiEligible(singleFailMixedResults), 1);
+assert(
+  'shouldShowAnalyzeAll(...) is true for "one fail + several pass/warning/na" — both AnalyzeAllButton.tsx and App.tsx\'s sidebar gate derive from this exact call',
+  shouldShowAnalyzeAll(singleFailMixedResults) === true,
+);
+assert(
+  'a run with ZERO eligible checks still correctly does NOT show Analyze All',
+  shouldShowAnalyzeAll(singleFailMixedResults.filter((r) => r.status !== 'fail')) === false,
 );
 
 // ── Summary ───────────────────────────────────────────────────────────────────

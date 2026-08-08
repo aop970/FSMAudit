@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CheckResult } from '../audit/types';
-import { isAiEligible } from '../ai/aiGate';
+import { countAiEligible, shouldShowAnalyzeAll } from '../ai/aiGate';
+import { estimateAnalyzeAllCost } from '../ai/bragiClient';
 
 export type AnalyzeAllState = 'idle' | 'loading' | 'done' | 'error';
 
@@ -19,8 +21,15 @@ interface AnalyzeAllButtonProps {
 
 export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progress, onRun, onClear }: AnalyzeAllButtonProps) {
   // T-670: token-budget cut — Analyze All only ever sends FAIL checks.
-  const failures = results.filter((r) => isAiEligible(r.status));
-  if (failures.length < 2 || !apiKey.trim()) return null;
+  // T-671: the >= 2 threshold vanished the button on a real SES run with a
+  // single FAIL — shouldShowAnalyzeAll() is the one place that decision
+  // lives now, shared with App.tsx's sidebar trigger so they can't drift.
+  const eligibleCount = countAiEligible(results);
+  // Memoized: estimateAnalyzeAllCost sums a Haiku estimate per eligible
+  // check — cheap, but no reason to recompute on every keystroke in the
+  // apiKey field either (same rationale as CheckCard's analysisCostEst).
+  const totalCostEst = useMemo(() => estimateAnalyzeAllCost(results), [results]);
+  if (!shouldShowAnalyzeAll(results) || !apiKey.trim()) return null;
 
   return (
     <div className="rounded-xl p-5" style={{ border: '1px solid rgba(59,158,255,0.25)', backgroundColor: 'rgba(59,158,255,0.06)' }}>
@@ -28,7 +37,7 @@ export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progr
         <div>
           <h3 className="text-sm font-semibold text-mc-text">Analyze All Failures</h3>
           <p className="text-xs text-mc-dim">
-            {failures.length} check{failures.length === 1 ? '' : 's'} failed — send all to Bragi for a combined assessment
+            {eligibleCount} check{eligibleCount === 1 ? '' : 's'} failed — send all to Bragi for a combined assessment
           </p>
         </div>
         {state === 'idle' && (
@@ -42,6 +51,9 @@ export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progr
           >
             <Sparkles className="h-4 w-4" />
             Analyze All Failures
+            <span className="ml-1 rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: 'rgba(255,255,255,0.2)' }}>
+              {totalCostEst}
+            </span>
           </button>
         )}
         {state === 'loading' && (

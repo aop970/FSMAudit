@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Play, Loader2, RotateCcw, Eye, EyeOff, Sparkles, Mail, X as XIcon, CheckCircle, AlertCircle, ClipboardList } from 'lucide-react';
 import Papa from 'papaparse';
 import { Header } from './components/Header';
@@ -24,9 +24,9 @@ import { runSesAudit } from './audit/runSesAudit';
 import { runCiAudit } from './audit/runCiAudit';
 import { getAuditRules, initAuditRulesFromServer } from './audit/auditRules';
 import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow, ParsedData, CiControlEntry, CiParsedData } from './audit/types';
-import { runTieredAnalysis } from './ai/bragiClient';
+import { runTieredAnalysis, estimateAnalyzeAllCost } from './ai/bragiClient';
 import type { EmailEntry } from './ai/bragiClient';
-import { isAiEligible } from './ai/aiGate';
+import { shouldShowAnalyzeAll } from './ai/aiGate';
 import type { AnalyzeAllState } from './components/AnalyzeAllButton';
 import { ReviewTab } from './components/ReviewTab';
 import { postRun, isApiConfigured, checkNameToSlug } from './lib/auditApi';
@@ -140,6 +140,13 @@ export default function App() {
   const [aaOutput, setAaOutput]         = useState('');
   const [aaError, setAaError]           = useState('');
   const [aaProgress, setAaProgress]     = useState('');
+  // T-671: memoized so typing in the API-key field doesn't re-sum a Haiku
+  // estimate per eligible check on every keystroke (same rationale as
+  // CheckCard's analysisCostEst / AnalyzeAllButton's totalCostEst).
+  const sidebarAnalyzeAllCostEst = useMemo(
+    () => (payload ? estimateAnalyzeAllCost(payload.results) : ''),
+    [payload],
+  );
 
   async function runAnalyzeAll() {
     if (!payload || !apiKey.trim()) return;
@@ -627,8 +634,10 @@ export default function App() {
             </div>
           )}
 
-          {/* Analyze All — sidebar trigger (visible when key set + failures exist) */}
-          {apiKey.trim() && payload && payload.results.filter((r) => isAiEligible(r.status)).length >= 2 && (
+          {/* Analyze All — sidebar trigger (visible when key set + at least
+              one AI-eligible FAIL exists — T-671: was ">= 2", which a real
+              SES run with a single FAIL never satisfied) */}
+          {apiKey.trim() && payload && shouldShowAnalyzeAll(payload.results) && (
             <div className="rounded-lg px-3 py-2.5" style={{ border: '1px solid color-mix(in srgb, var(--mc-blue) 25%, transparent)', backgroundColor: 'color-mix(in srgb, var(--mc-blue) 6%, transparent)' }}>
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-mc-blue">Bragi Analysis</p>
               {aaState === 'idle' && (
@@ -642,6 +651,9 @@ export default function App() {
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   Analyze All Failures
+                  <span className="rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: 'rgba(255,255,255,0.2)' }}>
+                    {sidebarAnalyzeAllCostEst}
+                  </span>
                 </button>
               )}
               {aaState === 'loading' && (

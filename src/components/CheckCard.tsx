@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, ZoomIn, Download } from 'lucide-react';
+import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CheckResult, CheckStatus, ParsedData, CiParsedData } from '../audit/types';
-import { estimateCost, estimateTokens, estimateDeepDiveCost, analyzeCheck, runDeepDive } from '../ai/bragiClient';
+import { estimateDeepDiveCost, runDeepDive } from '../ai/bragiClient';
 import { isAiEligible } from '../ai/aiGate';
 import { loadVerdict, saveVerdict } from '../audit/check07Verdicts';
 import type { UserVerdict } from '../audit/check07Verdicts';
@@ -57,13 +57,18 @@ const STATUS_STYLES: Record<CheckStatus, { barColor: string; chip: string; label
 
 export function CheckCard({ result, allResults, defaultOpen = false, apiKey, program, onTokensUsed, externalAiOutput, invoiceFileName, parsedData }: CheckCardProps) {
   const [open, setOpen] = useState(defaultOpen);
+  // T-671: "Analyze with Bragi" and "Deep Dive" were two buttons doing two
+  // different jobs — the prominent one (Analyze with Bragi) ran a
+  // flagged-rows-only Haiku summary with no source data, exactly the
+  // complaint Allan raised ("does not actually help source the error, it
+  // just summarizes it"). Consolidated onto one button, powered by the
+  // source-data path (runDeepDive) that used to be Deep Dive-only. State
+  // names below keep the ai* prefix since this is now simply "the"
+  // per-check analysis — there is no second, cheaper button left to
+  // distinguish it from.
   const [aiState, setAiState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [aiOutput, setAiOutput] = useState('');
   const [aiError, setAiError] = useState('');
-  // Deep Dive state
-  const [ddState, setDdState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
-  const [ddOutput, setDdOutput] = useState('');
-  const [ddError, setDdError] = useState('');
   // Check 19: session-scoped per-row dismiss (resets automatically when component remounts on new upload)
   const [dismissedCheck19, setDismissedCheck19] = useState<Set<string>>(new Set());
   // Check 7: verdict state map (rowKey → UserVerdict). Keyed by rowKey, initialised from localStorage.
@@ -104,47 +109,31 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   }, []);
   const s = STATUS_STYLES[result.status];
 
-  // T-670: token-budget cut — AI analysis (Analyze + Deep Dive) only ever
-  // fires on FAIL checks. isAiEligible() is the single choke point shared
-  // with bragiClient.ts, AnalyzeAllButton.tsx, and App.tsx's Analyze-All gate.
-  const showBragiButton = isAiEligible(result.status) && apiKey.trim();
-  const costEst = showBragiButton ? estimateCost(result) : '';
-  const tokenEst = showBragiButton ? estimateTokens(result) : 0;
-
-  // T-669: Deep Dive is available on every AI-eligible check, not just
-  // 3/5/7 — the old DEEP_DIVE_CHECKS allowlist gated it to a hardcoded set
-  // even though the source-slice builder works generically across checks.
-  // T-670 then narrowed "AI-eligible" to FAIL only (see showBragiButton).
-  const showDeepDive = showBragiButton && !!allResults && allResults.length > 0;
+  // T-670: token-budget cut — AI analysis only ever fires on FAIL checks.
+  // isAiEligible() is the single choke point shared with bragiClient.ts,
+  // AnalyzeAllButton.tsx, and App.tsx's Analyze-All gates.
+  // T-671: this now also gates the ONLY per-check analysis button — Deep
+  // Dive's old requirement (a populated allResults, for cross-check context)
+  // is folded in here since there is no longer a separate, cheaper button
+  // that could run without it.
+  const showBragiButton = isAiEligible(result.status) && !!apiKey.trim() && !!allResults && allResults.length > 0;
   // Memoized (Vera, T-669/T-670 review): estimateDeepDiveCost builds the REAL
-  // Deep Dive prompt — context bundle + source slice + JSON.stringify of up to
+  // analysis prompt — context bundle + source slice + JSON.stringify of up to
   // MAX_ASSOCIATES_PER_DEEP_DIVE x MAX_SOURCE_ROWS_PER_ASSOCIATE_PER_SOURCE rows
   // across every source. Unmemoized it re-ran on every render of every failed
   // check, including each keystroke in App's API-key input (apiKey is App state
   // and re-renders all CheckCards). The estimate only depends on these inputs.
-  const deepDiveCostEst = useMemo(
-    () => (showDeepDive ? estimateDeepDiveCost(result, allResults, parsedData ?? null, program) : ''),
-    [showDeepDive, result, allResults, parsedData, program],
+  // T-671: do not swap this for the old flaggedRows-only estimateCost() —
+  // that would silently understate the real per-click cost again.
+  const analysisCostEst = useMemo(
+    () => (showBragiButton ? estimateDeepDiveCost(result, allResults, parsedData ?? null, program) : ''),
+    [showBragiButton, result, allResults, parsedData, program],
   );
 
   async function handleAnalyze() {
+    if (!allResults) return;
     setAiState('loading');
     setAiError('');
-    try {
-      const { text, inputTokens, outputTokens } = await analyzeCheck(apiKey, result);
-      setAiOutput(text);
-      setAiState('done');
-      onTokensUsed?.(inputTokens, outputTokens);
-    } catch (err) {
-      setAiError(err instanceof Error ? err.message : String(err));
-      setAiState('error');
-    }
-  }
-
-  async function handleDeepDive() {
-    if (!allResults) return;
-    setDdState('loading');
-    setDdError('');
     try {
       const { text, inputTokens, outputTokens } = await runDeepDive(
         apiKey,
@@ -154,12 +143,12 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
         program,
         () => { /* progress handled inline */ },
       );
-      setDdOutput(text);
-      setDdState('done');
+      setAiOutput(text);
+      setAiState('done');
       onTokensUsed?.(inputTokens, outputTokens);
     } catch (err) {
-      setDdError(err instanceof Error ? err.message : String(err));
-      setDdState('error');
+      setAiError(err instanceof Error ? err.message : String(err));
+      setAiState('error');
     }
   }
 
@@ -494,7 +483,12 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
             </div>
           )}
 
-          {/* Bragi Analysis — quick Haiku analyze button (shown when no external AI output) */}
+          {/* Analyze with Bragi — T-671: single button, source-data-backed
+              (was two buttons: a Haiku flagged-rows-only summary here, plus
+              a separate "Deep Dive" button below that actually had the
+              source data. Consolidated onto the one mechanism that answers
+              Allan's original ask — this button now runs the same
+              associate-scoped source-row analysis Deep Dive used to. */}
           {showBragiButton && !externalAiOutput && (
             <div className="space-y-3">
               {aiState === 'idle' && (
@@ -509,7 +503,7 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                   <Sparkles className="h-3.5 w-3.5" />
                   Analyze with Bragi
                   <span className="ml-1 rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: 'rgba(59,158,255,0.2)' }}>
-                    ~{tokenEst} tokens · {costEst}
+                    Sonnet · source data · {analysisCostEst}
                   </span>
                 </button>
               )}
@@ -517,7 +511,7 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
               {aiState === 'loading' && (
                 <div className="flex items-center gap-2 text-xs text-mc-blue">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Asking Bragi…
+                  Asking Bragi — analyzing {result.checkName} with source data…
                 </div>
               )}
 
@@ -550,74 +544,6 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                     type="button"
                     onClick={() => { setAiState('idle'); setAiOutput(''); }}
                     className="mt-2 text-[10px] text-mc-dim hover:text-mc-blue"
-                  >
-                    Clear
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Deep Dive button — Sonnet full context bundle */}
-          {showDeepDive && (
-            <div className="space-y-3">
-              {ddState === 'idle' && (
-                <button
-                  type="button"
-                  onClick={handleDeepDive}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition"
-                  style={{
-                    border: '1px solid rgba(255,186,8,0.4)',
-                    backgroundColor: 'rgba(255,186,8,0.06)',
-                    color: '#ffba08',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,186,8,0.12)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,186,8,0.06)')}
-                >
-                  <ZoomIn className="h-3.5 w-3.5" />
-                  Deep Dive
-                  <span className="ml-1 rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: 'rgba(255,186,8,0.2)' }}>
-                    Sonnet · source data · {deepDiveCostEst}
-                  </span>
-                </button>
-              )}
-
-              {ddState === 'loading' && (
-                <div className="flex items-center gap-2 text-xs text-mc-amber">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Running deep dive on {result.checkName}…
-                </div>
-              )}
-
-              {ddState === 'error' && (
-                <div className="space-y-2">
-                  <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">
-                    {ddError}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleDeepDive}
-                    className="text-xs text-mc-blue hover:underline"
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-
-              {ddState === 'done' && ddOutput && (
-                <div className="rounded-lg border p-4" style={{ borderColor: 'rgba(255,186,8,0.3)', backgroundColor: 'rgba(255,186,8,0.05)' }}>
-                  <div className="mb-2 flex items-center gap-1.5">
-                    <ZoomIn className="h-3.5 w-3.5 text-mc-amber" />
-                    <span className="text-xs font-semibold text-mc-text">Deep Dive — Sonnet Analysis</span>
-                    <span className="ml-auto text-[10px] text-mc-dim">advisory — rule-based checks are authoritative</span>
-                  </div>
-                  <div className="prose">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{ddOutput}</ReactMarkdown>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => { setDdState('idle'); setDdOutput(''); }}
-                    className="mt-2 text-[10px] text-mc-dim hover:text-mc-amber"
                   >
                     Clear
                   </button>

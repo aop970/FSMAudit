@@ -1,7 +1,28 @@
 // bragiClient.ts — Tiered AI orchestrator
-// Tier 1: Haiku per-check (fast, cheap, 20-row cap)
+// Tier 1: Haiku per-check (fast, cheap, 20-row cap) — feeds the "Analyze
+//         All" combined report only (see T-671 decision below).
 // Synthesis: Sonnet (assembles full report from all Haiku outputs)
-// Tier 2: Sonnet Deep Dive on demand (full context bundle per check)
+// Per-check: Sonnet source-data analysis on demand (full context bundle +
+//         associate-scoped source rows — this is what the single "Analyze
+//         with Bragi" button on each check card calls, as of T-671)
+//
+// T-671 decision — why the report path (Tier 1 + Synthesis) stays on Haiku
+// while the per-check button moved to source-data Sonnet:
+// Allan's complaint ("does not actually help source the error, it just
+// summarizes it") was specifically about the PER-CHECK button — the one he
+// clicks when investigating a single finding. That's exactly what the
+// source-data path is for: deep, associate-scoped, more expensive.
+// "Analyze All" is a different job — a quick combined overview across every
+// failed check — and T-670 already exists specifically because Allan asked
+// to cut AI token spend. Moving Tier 1 to a full source-data Sonnet call per
+// failed check would multiply the batch report's cost by roughly
+// (source-data price / Haiku price) × number of failed checks, which cuts
+// directly against the token-budget intent that produced T-670. Fail-only
+// gating keeps N small today, but "cheap because N is small" is not the
+// same guarantee as "cheap by design" — a run with several real failures
+// should still produce an affordable combined report. If Allan later wants
+// the batch report to be source-data-backed too, that's a deliberate
+// follow-up ask, not something to fold in unprompted here.
 
 import type { CheckResult, ParsedData, CiParsedData } from '../audit/types';
 import { getAuditRules } from '../audit/auditRules';
@@ -241,32 +262,67 @@ export function estimateDeepDiveCost(
   const tokens = estimateDeepDiveTokens(result, allResults, parsedData, program);
   const inputTokens = tokens - DEEP_DIVE_MAX_TOKENS;
   const cost = (inputTokens * SONNET_INPUT_PER_M + DEEP_DIVE_MAX_TOKENS * SONNET_OUTPUT_PER_M) / 1_000_000;
+  return formatCost(cost);
+}
+
+function formatCost(cost: number): string {
   return cost < 0.001 ? '<$0.001' : `~$${cost.toFixed(3)}`;
 }
 
-// ── Legacy single-check analyze (kept for CheckCard backward compat) ─────
-// CheckCard will be updated to use the new flow, but keep this as fallback
+// Claude Haiku 4.5 list pricing ($/thousand tokens, matching the original
+// formula's units) — used by estimateTokens/estimateCost (a single check's
+// Tier-1 Haiku call) and estimateAnalyzeAllCost (the batch total below).
+const HAIKU_INPUT_PER_K = 0.00025;
+const HAIKU_OUTPUT_PER_K = 0.00125;
+
+// ── Per-check Tier-1 Haiku cost math ──────────────────────────────────────
+// T-671: no longer used by CheckCard's per-check button (that button now
+// calls runDeepDive — see estimateDeepDiveCost above). Still live: feeds
+// estimateAnalyzeAllCost's per-check total, since Tier 1 of the "Analyze
+// All" report stays on Haiku (see the file-header comment on why).
 
 export function estimateTokens(result: CheckResult): number {
   const charCount = JSON.stringify(result.flaggedRows.slice(0, 20)).length;
   return Math.ceil((charCount + 500) / 4) + HAIKU_MAX_TOKENS;
 }
 
+function haikuCallCostUsd(inputTokens: number): number {
+  return (inputTokens * HAIKU_INPUT_PER_K + HAIKU_MAX_TOKENS * HAIKU_OUTPUT_PER_K) / 1000;
+}
+
 export function estimateCost(result: CheckResult): string {
   const tokens = estimateTokens(result);
   const inputTokens = tokens - HAIKU_MAX_TOKENS;
-  const cost = (inputTokens * 0.00025 + HAIKU_MAX_TOKENS * 0.00125) / 1000;
-  return cost < 0.001 ? '<$0.001' : `~$${cost.toFixed(3)}`;
+  return formatCost(haikuCallCostUsd(inputTokens));
 }
 
-export async function analyzeCheck(
-  apiKey: string,
-  result: CheckResult,
-): Promise<CallResult> {
-  const rules = getAuditRules();
-  const systemBlocks = buildSystemPrompt(rules.bragiSystemPrompt);
-  const userPrompt = buildHaikuPrompt(result);
-  return callClaude(apiKey, HAIKU_MODEL, HAIKU_MAX_TOKENS, systemBlocks, userPrompt);
+/**
+ * Total estimated cost for "Analyze All" — sums a Tier-1 Haiku call per
+ * AI-eligible (FAIL) check, plus a rough Tier-2 synthesis call estimate.
+ * T-671: Allan must see the total before clicking, same principle as
+ * estimateDeepDiveCost for the per-check button. This does NOT rebuild the
+ * real synthesis prompt (unlike estimateDeepDiveCost, which builds the real
+ * Deep Dive prompt) — the Haiku-per-check total already dominates the
+ * estimate, and building N real Haiku prompts just to size a cost preview
+ * isn't worth the extra work for a number that's already an approximation
+ * (actual Haiku/Sonnet output length varies at request time regardless).
+ */
+export function estimateAnalyzeAllCost(results: CheckResult[]): string {
+  const eligible = results.filter((r) => isAiEligible(r.status));
+  if (eligible.length === 0) return '<$0.001';
+
+  const haikuTotal = eligible.reduce((sum, r) => {
+    const tokens = estimateTokens(r);
+    return sum + haikuCallCostUsd(tokens - HAIKU_MAX_TOKENS);
+  }, 0);
+
+  // Synthesis input scales with the Haiku outputs being assembled (capped at
+  // HAIKU_MAX_TOKENS each) plus one stat line per check for the
+  // passing/na/warning section — a rough upper bound, not the real prompt.
+  const approxSynthesisInputTokens = eligible.length * HAIKU_MAX_TOKENS + results.length * 60;
+  const synthesisCost = (approxSynthesisInputTokens * SONNET_INPUT_PER_M + SYNTHESIS_MAX_TOKENS * SONNET_OUTPUT_PER_M) / 1_000_000;
+
+  return formatCost(haikuTotal + synthesisCost);
 }
 
 export async function analyzeAllFailures(

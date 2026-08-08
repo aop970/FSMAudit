@@ -28,6 +28,9 @@ import {
 } from './sourceSlice.js';
 import { buildDeepDivePrompt } from './promptTemplates.js';
 import type { CheckResult, ParsedData, LaborRow, SesPunchRow, ShiftRow } from '../audit/types.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── Assertion plumbing ────────────────────────────────────────────────────────
 
@@ -376,6 +379,77 @@ assert(
   bundlePostFixNumbering.crossCheckRows
     .find((e) => e.employeeName === 'Ivy Ingram')
     ?.rows.some((r) => r.checkId === 22 && r.checkName === 'Payroll Tag Exceptions') ?? false,
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-671 — the "Analyze with Bragi" button is now wired to the source-data
+// path, not the Haiku-only flaggedRows summary
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Allan's exact complaint: he clicked "Analyze with Bragi" right below
+// Check 3 and got a Haiku-grade summary paragraph with no sourcing, while a
+// separate "Deep Dive" button underneath (unclicked) had the real fix from
+// T-669. This section proves the CONSOLIDATION actually happened in the
+// shipped component — not just that the underlying prompt machinery works
+// (that's what the rest of this file already proves) — by reading
+// CheckCard.tsx's actual source and checking its wiring, then re-rendering
+// the exact prompt that button now sends and printing it for a human to read.
+
+console.log('\nCheckCard.tsx wiring — one button, source-data path (T-671)');
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const checkCardSource = fs.readFileSync(path.join(__dirname, '../components/CheckCard.tsx'), 'utf8');
+
+assert(
+  "CheckCard imports runDeepDive from bragiClient (the source-data path)",
+  /import\s*\{[^}]*\brunDeepDive\b[^}]*\}\s*from\s*'\.\.\/ai\/bragiClient'/.test(checkCardSource),
+);
+assert(
+  'CheckCard no longer references analyzeCheck (the dead Haiku-only, flaggedRows-only function)',
+  !/\banalyzeCheck\b/.test(checkCardSource),
+);
+assert(
+  "handleAnalyze() — the function bound to the 'Analyze with Bragi' button — calls runDeepDive",
+  /async function handleAnalyze\(\)[\s\S]*?runDeepDive\(/.test(checkCardSource),
+);
+assert(
+  "no separate 'Deep Dive' button label remains — one button, not two",
+  !/>\s*Deep Dive\s*</.test(checkCardSource),
+);
+// Isolate the bragiClient import line specifically — the file's own
+// explanatory comments legitimately mention the retired estimateCost() by
+// name (documenting what NOT to use), so check the import, not whole-file text.
+const bragiClientImportLine = checkCardSource.split('\n').find((l) => l.includes("from '../ai/bragiClient'")) ?? '';
+assert(
+  'CheckCard imports the real source-data cost estimator (estimateDeepDiveCost)',
+  bragiClientImportLine.includes('estimateDeepDiveCost'),
+);
+assert(
+  'CheckCard no longer imports the old flaggedRows-only estimators (estimateCost/estimateTokens)',
+  !/\bestimateCost\b/.test(bragiClientImportLine) && !/\bestimateTokens\b/.test(bragiClientImportLine),
+);
+assert(
+  "the button label read by Allan is 'Analyze with Bragi' (not renamed to 'Deep Dive' or similar)",
+  checkCardSource.includes('Analyze with Bragi'),
+);
+
+// Re-render the exact prompt CheckCard's (single, now source-data-backed)
+// "Analyze with Bragi" button sends for a Check-3-shaped case, using the
+// SAME check3Result/slice/bundle already built above in this file — this is
+// not a new prompt, it's proof that the one button now sends what used to
+// be Deep Dive-only. Read it, don't just assert on it.
+console.log('\n--- T-671: the prompt "Analyze with Bragi" now sends for Check 3 (excerpt) ---');
+const t671PromptExcerptStart = renderedPrompt.indexOf('SOURCE DATA:');
+console.log(renderedPrompt.slice(t671PromptExcerptStart, t671PromptExcerptStart + 600));
+console.log('--- end excerpt ---\n');
+
+assert(
+  'the prompt the consolidated button sends contains real punch rows with timeType — the exact claim Allan disproved by using the app',
+  renderedPrompt.includes('"timeType"') && renderedPrompt.includes('"Overtime"'),
+);
+assert(
+  'the prompt is NOT the old Haiku flaggedRows-only shape (no source data, no timeType) — it is the full Deep Dive prompt',
+  renderedPrompt.includes('FULL FLAGGED ROWS') && renderedPrompt.includes('SOURCE DATA:') && renderedPrompt.includes('RELEVANT AUDIT RULE TEXT:'),
 );
 
 // ── Summary ───────────────────────────────────────────────────────────────────
