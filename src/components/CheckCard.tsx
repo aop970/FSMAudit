@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { ChevronDown, CheckCircle2, AlertTriangle, XCircle, MinusCircle, Sparkles, Loader2, ZoomIn, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -116,7 +116,16 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   // even though the source-slice builder works generically across checks.
   // T-670 then narrowed "AI-eligible" to FAIL only (see showBragiButton).
   const showDeepDive = showBragiButton && !!allResults && allResults.length > 0;
-  const deepDiveCostEst = showDeepDive ? estimateDeepDiveCost(result, allResults, parsedData ?? null, program) : '';
+  // Memoized (Vera, T-669/T-670 review): estimateDeepDiveCost builds the REAL
+  // Deep Dive prompt — context bundle + source slice + JSON.stringify of up to
+  // MAX_ASSOCIATES_PER_DEEP_DIVE x MAX_SOURCE_ROWS_PER_ASSOCIATE_PER_SOURCE rows
+  // across every source. Unmemoized it re-ran on every render of every failed
+  // check, including each keystroke in App's API-key input (apiKey is App state
+  // and re-renders all CheckCards). The estimate only depends on these inputs.
+  const deepDiveCostEst = useMemo(
+    () => (showDeepDive ? estimateDeepDiveCost(result, allResults, parsedData ?? null, program) : ''),
+    [showDeepDive, result, allResults, parsedData, program],
+  );
 
   async function handleAnalyze() {
     setAiState('loading');
