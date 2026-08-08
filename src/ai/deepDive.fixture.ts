@@ -27,6 +27,7 @@ import {
   MAX_SOURCE_ROWS_PER_ASSOCIATE_PER_SOURCE,
 } from './sourceSlice.js';
 import { buildDeepDivePrompt } from './promptTemplates.js';
+import { estimateTokens, estimateAnalyzeAllCost } from './bragiClient.js';
 import type { CheckResult, ParsedData, LaborRow, SesPunchRow, ShiftRow } from '../audit/types.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -450,6 +451,111 @@ assert(
 assert(
   'the prompt is NOT the old Haiku flaggedRows-only shape (no source data, no timeType) — it is the full Deep Dive prompt',
   renderedPrompt.includes('FULL FLAGGED ROWS') && renderedPrompt.includes('SOURCE DATA:') && renderedPrompt.includes('RELEVANT AUDIT RULE TEXT:'),
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-671 — Vera review additions
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log('\nHaiku cost constants match published Haiku 4.5 rates (Vera, T-671)');
+
+// The "Analyze All" badge is the first user-facing surface to show a Haiku
+// cost figure. The constants behind it read 0.00025/0.00125 "per thousand
+// tokens" — i.e. $0.25/$1.25 per MTok, which is Haiku 3 pricing carried
+// forward when HAIKU_MODEL moved to haiku-4-5. Haiku 4.5 lists at $1.00 in /
+// $5.00 out per MTok, so the badge understated by 4x. This pins the
+// arithmetic to the published rates so the drift can't silently return.
+const HAIKU_4_5_INPUT_PER_M = 1.0;
+const HAIKU_4_5_OUTPUT_PER_M = 5.0;
+const HAIKU_MAX_TOKENS_FOR_TEST = 800; // mirrors bragiClient's HAIKU_MAX_TOKENS
+
+const costProbeCheck: CheckResult = {
+  checkId: 3,
+  checkName: 'Three-Way Punch Recon',
+  status: 'fail',
+  stats: 'Variance exceeds tolerance',
+  flaggedCount: 3,
+  flaggedRows: [
+    check3ShapedFlaggedRow('Alice Anderson', 40.0, 39.0),
+    check3ShapedFlaggedRow('Bob Blankfield', 20.0, 18.5),
+    check3ShapedFlaggedRow('Dan Dayoff', 30.0, 5.0),
+  ],
+};
+
+const probeInputTokens = estimateTokens(costProbeCheck) - HAIKU_MAX_TOKENS_FOR_TEST;
+const expectedHaikuUsd =
+  (probeInputTokens * HAIKU_4_5_INPUT_PER_M + HAIKU_MAX_TOKENS_FOR_TEST * HAIKU_4_5_OUTPUT_PER_M) / 1_000_000;
+// estimateAnalyzeAllCost = (Haiku per eligible check) + (one Sonnet synthesis).
+// Isolate the Haiku half by subtracting the synthesis term, computed the same
+// way bragiClient does (Sonnet 4.6 list: $3 in / $15 out per MTok).
+const synthesisUsd = ((1 * HAIKU_MAX_TOKENS_FOR_TEST + 1 * 60) * 3.0 + 4000 * 15.0) / 1_000_000;
+const reportedTotal = Number(estimateAnalyzeAllCost([costProbeCheck]).replace(/[^0-9.]/g, ''));
+const reportedHaikuHalf = reportedTotal - synthesisUsd;
+
+assert(
+  `Haiku half of estimateAnalyzeAllCost matches $1/$5 per MTok (expected ~$${expectedHaikuUsd.toFixed(4)}, got ~$${reportedHaikuHalf.toFixed(4)})`,
+  Math.abs(reportedHaikuHalf - expectedHaikuUsd) < 0.0015,
+  `pre-fix Haiku-3 rates would have produced ~$${(expectedHaikuUsd / 4).toFixed(4)}`,
+);
+assert(
+  'the reported Analyze All total is NOT the 4x-understated pre-fix figure',
+  reportedHaikuHalf > expectedHaikuUsd / 2,
+);
+
+console.log('\nSource-slice name-matching gap is disclosed to the model (Vera, T-671)');
+
+// Check 3's flaggedRows carry ONLY `associate: <name>` — no ID field — so
+// extractRowIdentity() always resolves them as kind:'name' and the source
+// slice matches source rows by NAME, even though the check itself reconciled
+// those same associates by associateId. An associate whose punch file spells
+// the name differently (middle initial, trailing space) therefore gets a
+// PARTIAL source block — invoice rows present, punch/shift rows silently
+// absent — with nothing in the prompt distinguishing that from "this person
+// genuinely has no punch rows". Vera flagged the matching semantics to Allan
+// rather than changing them unverified against real payroll names; this pins
+// the mitigation that DID ship: an explicit instruction telling the model not
+// to read an absent source group as an absent associate.
+
+const nameMismatchParsed = emptyParsedData();
+nameMismatchParsed.fsmIRows = [invoiceRow('A2', 'Nia Okonkwo', 40.0, 'Work')];
+// Same associateId, name spelled with a middle initial + trailing space:
+nameMismatchParsed.sesPunchRows = [punchRow('A2', 'Nia A. Okonkwo ', 30.0, 'Work')];
+nameMismatchParsed.shiftRows = [shiftRow('A2', 'Nia A. Okonkwo ', 30.0)];
+
+const nameMismatchCheck: CheckResult = {
+  checkId: 3,
+  checkName: 'Three-Way Punch Recon',
+  status: 'fail',
+  stats: 'Variance exceeds 2h tolerance',
+  flaggedCount: 1,
+  flaggedRows: [check3ShapedFlaggedRow('Nia Okonkwo', 40.0, 30.0)],
+};
+
+const nameMismatchSlice = buildAssociateSourceSlice(nameMismatchCheck, nameMismatchParsed);
+const niaEntry = nameMismatchSlice.associates.find((a) => a.identity.displayName === 'Nia Okonkwo');
+
+assert(
+  'KNOWN GAP (flagged to Allan, not silently fixed): a name-keyed associate whose punch file spells the name differently gets NO punch/shift source rows, even though the check reconciled them by associateId',
+  !!niaEntry && !niaEntry.groups.some((g) => g.label.startsWith('SES Punch Detail')),
+  `groups present: ${niaEntry?.groups.map((g) => g.label.split(' (')[0]).join(', ') ?? 'none'}`,
+);
+assert(
+  'the invoice rows DO still match (so the block is partial, not empty — the more misleading shape)',
+  !!niaEntry && niaEntry.groups.some((g) => g.label.startsWith('Invoice Labor Rows')),
+);
+
+const nameMismatchPrompt = buildDeepDivePrompt(
+  nameMismatchCheck,
+  buildContextBundle(nameMismatchCheck, [nameMismatchCheck], 'rule text'),
+  nameMismatchSlice,
+);
+assert(
+  'MITIGATION SHIPPED: the prompt explicitly warns that an absent source group means a name-matching gap, NOT an absent associate',
+  /absence of a source file's rows under an associate does NOT mean that associate is missing from that file/i.test(nameMismatchPrompt),
+);
+assert(
+  'the prompt forbids reporting a missing-punch/missing-shift root cause on that basis alone',
+  /never conclude the associate is absent from that file/i.test(nameMismatchPrompt),
 );
 
 // ── Summary ───────────────────────────────────────────────────────────────────

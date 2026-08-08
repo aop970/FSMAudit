@@ -656,6 +656,16 @@ export default function App() {
                   </span>
                 </button>
               )}
+              {/* Vera (T-671 review): same depth disclosure as AnalyzeAllButton.tsx —
+                  this trigger runs the Haiku-per-check combined report, NOT the
+                  per-check source-data analysis. Without this line the two
+                  surfaces look like the same feature behaving inconsistently. */}
+              {aaState === 'idle' && (
+                <p className="mt-1.5 text-[10px] leading-snug text-mc-dim">
+                  Quick overview (Haiku, no source data). Root-cause a single check with
+                  “Analyze with Bragi” on its card.
+                </p>
+              )}
               {aaState === 'loading' && (
                 <div className="space-y-1">
                   <div className="flex items-center justify-center gap-1.5 py-1 text-xs text-mc-blue">

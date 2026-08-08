@@ -39,6 +39,18 @@ export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progr
           <p className="text-xs text-mc-dim">
             {eligibleCount} check{eligibleCount === 1 ? '' : 's'} failed — send all to Bragi for a combined assessment
           </p>
+          {/* Vera (T-671 review): the depth difference between this button and
+              the per-check "Analyze with Bragi" button MUST be visible. This
+              one is Haiku-per-check + a Sonnet synthesis over flagged rows
+              only; the per-check button is Sonnet over the actual source rows.
+              Unlabelled, a user clicking here on a single-FAIL run gets a
+              summary for the very same check the card button would root-cause,
+              and reasonably concludes the source-data fix didn't work — which
+              is exactly the confusion that produced T-671. */}
+          <p className="mt-0.5 text-[10px] text-mc-dim/80">
+            Quick combined overview — Haiku summary per check, no source data. For root-cause on a
+            single check, use <span className="text-mc-blue">Analyze with Bragi</span> on that check&apos;s card.
+          </p>
         </div>
         {state === 'idle' && (
           <button

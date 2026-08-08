@@ -269,11 +269,18 @@ function formatCost(cost: number): string {
   return cost < 0.001 ? '<$0.001' : `~$${cost.toFixed(3)}`;
 }
 
-// Claude Haiku 4.5 list pricing ($/thousand tokens, matching the original
-// formula's units) — used by estimateTokens/estimateCost (a single check's
-// Tier-1 Haiku call) and estimateAnalyzeAllCost (the batch total below).
-const HAIKU_INPUT_PER_K = 0.00025;
-const HAIKU_OUTPUT_PER_K = 0.00125;
+// Claude Haiku 4.5 list pricing ($/million tokens) — matches the units the
+// Sonnet constants above already use. Keep in sync with HAIKU_MODEL.
+//
+// Vera (T-671 review): these were 0.00025 / 0.00125 "$/thousand tokens",
+// which works out to $0.25/$1.25 per MTok — Claude Haiku 3 pricing, carried
+// forward unnoticed when the model constant moved to haiku-4-5. Haiku 4.5
+// lists at $1.00 in / $5.00 out per MTok, so every Haiku figure the UI showed
+// was understating by 4x. Harmless while the number was buried in a retired
+// per-check estimate; not harmless now that T-671 surfaced it as the
+// "Analyze All" batch-total badge on two prominent buttons.
+const HAIKU_INPUT_PER_M = 1.0;
+const HAIKU_OUTPUT_PER_M = 5.0;
 
 // ── Per-check Tier-1 Haiku cost math ──────────────────────────────────────
 // T-671: no longer used by CheckCard's per-check button (that button now
@@ -287,13 +294,7 @@ export function estimateTokens(result: CheckResult): number {
 }
 
 function haikuCallCostUsd(inputTokens: number): number {
-  return (inputTokens * HAIKU_INPUT_PER_K + HAIKU_MAX_TOKENS * HAIKU_OUTPUT_PER_K) / 1000;
-}
-
-export function estimateCost(result: CheckResult): string {
-  const tokens = estimateTokens(result);
-  const inputTokens = tokens - HAIKU_MAX_TOKENS;
-  return formatCost(haikuCallCostUsd(inputTokens));
+  return (inputTokens * HAIKU_INPUT_PER_M + HAIKU_MAX_TOKENS * HAIKU_OUTPUT_PER_M) / 1_000_000;
 }
 
 /**
