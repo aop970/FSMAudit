@@ -2,6 +2,7 @@ import { Sparkles, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CheckResult } from '../audit/types';
+import { isAiEligible } from '../ai/aiGate';
 
 export type AnalyzeAllState = 'idle' | 'loading' | 'done' | 'error';
 
@@ -17,7 +18,8 @@ interface AnalyzeAllButtonProps {
 }
 
 export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progress, onRun, onClear }: AnalyzeAllButtonProps) {
-  const failures = results.filter((r) => r.status === 'fail' || r.status === 'warning');
+  // T-670: token-budget cut — Analyze All only ever sends FAIL checks.
+  const failures = results.filter((r) => isAiEligible(r.status));
   if (failures.length < 2 || !apiKey.trim()) return null;
 
   return (
@@ -26,7 +28,7 @@ export function AnalyzeAllButton({ results, apiKey, state, output, errMsg, progr
         <div>
           <h3 className="text-sm font-semibold text-mc-text">Analyze All Failures</h3>
           <p className="text-xs text-mc-dim">
-            {failures.length} check{failures.length === 1 ? '' : 's'} failed or warned — send all to Bragi for a combined assessment
+            {failures.length} check{failures.length === 1 ? '' : 's'} failed — send all to Bragi for a combined assessment
           </p>
         </div>
         {state === 'idle' && (

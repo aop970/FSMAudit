@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { CheckResult, CheckStatus, ParsedData, CiParsedData } from '../audit/types';
 import { estimateCost, estimateTokens, estimateDeepDiveCost, analyzeCheck, runDeepDive } from '../ai/bragiClient';
+import { isAiEligible } from '../ai/aiGate';
 import { loadVerdict, saveVerdict } from '../audit/check07Verdicts';
 import type { UserVerdict } from '../audit/check07Verdicts';
 import { exportCheck7 } from '../audit/check07Export';
@@ -103,13 +104,17 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
   }, []);
   const s = STATUS_STYLES[result.status];
 
-  const showBragiButton = (result.status === 'fail' || result.status === 'warning') && apiKey.trim();
+  // T-670: token-budget cut — AI analysis (Analyze + Deep Dive) only ever
+  // fires on FAIL checks. isAiEligible() is the single choke point shared
+  // with bragiClient.ts, AnalyzeAllButton.tsx, and App.tsx's Analyze-All gate.
+  const showBragiButton = isAiEligible(result.status) && apiKey.trim();
   const costEst = showBragiButton ? estimateCost(result) : '';
   const tokenEst = showBragiButton ? estimateTokens(result) : 0;
 
-  // T-669: Deep Dive is available on every failed/warned check, not just
+  // T-669: Deep Dive is available on every AI-eligible check, not just
   // 3/5/7 — the old DEEP_DIVE_CHECKS allowlist gated it to a hardcoded set
   // even though the source-slice builder works generically across checks.
+  // T-670 then narrowed "AI-eligible" to FAIL only (see showBragiButton).
   const showDeepDive = showBragiButton && !!allResults && allResults.length > 0;
   const deepDiveCostEst = showDeepDive ? estimateDeepDiveCost(result, allResults, parsedData ?? null, program) : '';
 
@@ -612,7 +617,7 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
             </div>
           )}
 
-          {(result.status === 'fail' || result.status === 'warning') && !apiKey.trim() && (
+          {isAiEligible(result.status) && !apiKey.trim() && (
             <p className="text-[10px] text-mc-dim">
               Enter a Claude API key in the left panel to enable Bragi Analysis.
             </p>

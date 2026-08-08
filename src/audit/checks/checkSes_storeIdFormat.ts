@@ -1,4 +1,5 @@
-// Check 17 (SES) — Client Store ID Format
+// Check 21 (SES) — Client Store ID Format (T-670: renumbered from 17, which
+// collided with check17_otMath.ts's canonical FSM/SES-shared id)
 // Client Store ID must have ≥2 digit numeric suffix (e.g. BB-07 not BB-7).
 // Flag rows where the numeric suffix after the last hyphen is a single digit.
 
@@ -15,7 +16,7 @@ export function checkSesStoreIdFormat(detailRows: LaborRow[]): CheckResult {
   });
 
   return {
-    checkId: 17,
+    checkId: 21, // T-670: was 17 — collided with check17OtMath's canonical FSM/SES-shared id
     checkName: 'Store ID Format',
     status: flagged.length === 0 ? 'pass' : 'fail',
     stats: flagged.length === 0

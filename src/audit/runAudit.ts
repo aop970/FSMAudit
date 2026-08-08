@@ -23,6 +23,7 @@ import { check17OtMath } from './checks/check17_otMath';
 import { check18Holidays } from './checks/check18_holidays';
 import { check19RosterTab } from './checks/check19_rosterTab';
 import { getAuditRules } from './auditRules';
+import { applyNeverFailPolicy } from './neverFailPolicy';
 
 function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -45,7 +46,7 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
   const uniqueIds = new Set<string>();
   for (const r of laborRows) if (r.associateId) uniqueIds.add(r.associateId);
 
-  const results: CheckResult[] = [
+  const rawResults: CheckResult[] = [
     check01Labor(allFsmI, allFsmII),
     check02Formulas(allFsmI, allFsmII),
     check03PunchRecon(allFsmI, allFsmII, parsed.punchRows),
@@ -70,6 +71,11 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check18Holidays(allFsmI, allFsmII, 'fsm'),
     check19RosterTab(allFsmI, allFsmII, parsed.rosterEntries),
   ];
+
+  // T-670: wired up alongside the SES never-fail policy so that when Allan
+  // gives the FSM list, adding names to NEVER_FAIL_CHECK_NAMES.fsm is the
+  // entire change — no code edit needed here. Empty set today = no-op.
+  const results = applyNeverFailPolicy(rawResults, 'fsm');
 
   const period = parsed.declaredPeriod
     ? { start: fmtDate(parsed.declaredPeriod.start), end: fmtDate(parsed.declaredPeriod.end) }

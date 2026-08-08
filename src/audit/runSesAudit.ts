@@ -1,7 +1,13 @@
 // runSesAudit.ts — SES audit orchestrator. Returns AuditPayload.
-// Runs 19 checks: 1-2,4-15 reuse FSM checks; 3,16,17,18 are SES-specific; 18=Holiday Pay.
+// Runs 19 checks: 1-2,4-15 reuse FSM checks; 3 is SES-specific (three-way
+// punch recon); 17=OT Math and 18=Holiday Pay keep their canonical
+// FSM-shared ids so SES and FSM stay comparable; 20/21/22 are SES-only
+// (2020CO, Store ID Format, Payroll Tag — T-670 renumbering, was 16/17/18,
+// the last two of which collided with OT Math/Holidays). 16 and 19 are
+// intentionally unused (19 reserved for a possible future SES roster check).
 
 import type { AuditPayload, CheckResult, ControlTableEntry, ParsedData } from './types';
+import { applyNeverFailPolicy } from './neverFailPolicy';
 import { buildSesControlMap } from './sesControlTable';
 import { check02Formulas } from './checks/check02_formulas';
 import { check03SesThreeWayRecon } from './checks/check03_ses_threeWayRecon';
@@ -77,7 +83,8 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     flaggedRows: [],
   };
 
-  const results: CheckResult[] = [
+  // Ascending checkId order — see the header comment for the id map.
+  const rawResults: CheckResult[] = [
     { checkId: 1, checkName: 'Labor Billing Validation', status: 'na', stats: 'Not applicable for SES — associates have individual rates', flaggedCount: 0, flaggedRows: [] },
     check02Formulas(parsed.fsmIRows, parsed.fsmIIRows),
     check03SesThreeWayRecon(parsed.fsmIRows, parsed.sesPunchRows, parsed.shiftRows),
@@ -97,12 +104,17 @@ export function runSesAudit(parsed: ParsedData, controlTable: ControlTableEntry[
     check13PoNumber(parsed.e17Value, rules.poNumber, 'E19'),
     check14TermedPto(parsed.fsmIRows, parsed.fsmIIRows, parsed.mgmtRows, parsed.termedPtoRows),
     check15CustomRules(parsed.fsmIRows, parsed.fsmIIRows),
-    checkSes2020co(parsed.fsmIRows),
-    checkSesStoreIdFormat(parsed.fsmIRows),
-    checkSesPayrollTag(parsed.sesPunchRows, parsed.declaredPeriod),
     check17OtMath(parsed.fsmIRows, parsed.fsmIIRows, 'ses'),
     check18Holidays(parsed.fsmIRows, parsed.fsmIIRows, 'ses'),
+    checkSes2020co(parsed.fsmIRows),           // 20 (T-670, was 16)
+    checkSesStoreIdFormat(parsed.fsmIRows),    // 21 (T-670, was 17 — collided with OT Math)
+    checkSesPayrollTag(parsed.sesPunchRows, parsed.declaredPeriod), // 22 (T-670, was 18 — collided with Holidays)
   ];
+
+  // T-670: 2020CO / Payroll Tag / Holiday Pay (SES) can never surface as a
+  // hard fail — Allan verifies these by hand; a fail there just means "go
+  // check this," which 'warning' already conveys. See neverFailPolicy.ts.
+  const results = applyNeverFailPolicy(rawResults, 'ses');
 
   const period = parsed.declaredPeriod
     ? { start: fmtDate(parsed.declaredPeriod.start), end: fmtDate(parsed.declaredPeriod.end) }

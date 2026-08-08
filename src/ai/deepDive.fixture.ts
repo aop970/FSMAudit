@@ -324,6 +324,60 @@ assert(
   !('parsedData' in mockAuditPayload) && !('sesPunchRows' in mockAuditPayload),
 );
 
+// ── Test 7 (T-670): checkId renumbering repairs cross-check context ─────────
+//
+// T-670 found and fixed a duplicate-checkId bug in runSesAudit.ts (two
+// checks both claiming id 18: Holiday Pay Validation and Payroll Tag
+// Exceptions). contextBundle.ts's cross-check scan filters
+// `allResults.filter(r => r.checkId !== targetResult.checkId)` — with a
+// colliding id, that filter wrongly dropped the INNOCENT sibling from every
+// Deep Dive's cross-check data, silently, for any check sharing that id.
+// This proves the repair: same associate, same sibling check, only the
+// checkId changes (18 → the post-fix 22) — pre-fix numbering loses the
+// sibling, post-fix numbering finds it.
+
+console.log('\ncheckId renumbering repairs cross-check context (T-670)');
+
+const holidayTarget: CheckResult = {
+  checkId: 18,
+  checkName: 'Holiday Pay Validation',
+  status: 'warning',
+  stats: '1 associate flagged',
+  flaggedCount: 1,
+  flaggedRows: [{ name: 'Ivy Ingram', date: '2026-05-25', issue: 'Wrong hours' }],
+};
+
+// Pre-T-670 shape: Payroll Tag Exceptions also claimed checkId 18.
+const payrollTagSiblingPreFix: CheckResult = {
+  checkId: 18,
+  checkName: 'Payroll Tag Exceptions',
+  status: 'warning',
+  stats: '1 EXC row flagged',
+  flaggedCount: 1,
+  flaggedRows: [{ employeeName: 'Ivy Ingram', payrollTag: '2020_PAYROLL_20260615_EXC_LATE', issue: 'date outside period' }],
+};
+
+// Post-T-670 shape: Payroll Tag Exceptions now owns checkId 22.
+const payrollTagSiblingPostFix: CheckResult = { ...payrollTagSiblingPreFix, checkId: 22 };
+
+const bundlePreFixNumbering = buildContextBundle(holidayTarget, [holidayTarget, payrollTagSiblingPreFix], 'rule text');
+const bundlePostFixNumbering = buildContextBundle(holidayTarget, [holidayTarget, payrollTagSiblingPostFix], 'rule text');
+
+assert(
+  'BUG REPRODUCED: with colliding checkId=18, the innocent sibling is wrongly dropped from cross-check data',
+  bundlePreFixNumbering.crossCheckRows.find((e) => e.employeeName === 'Ivy Ingram') === undefined,
+);
+assert(
+  'FIXED: with the post-renumbering checkId=22, the sibling is correctly included',
+  bundlePostFixNumbering.crossCheckRows.find((e) => e.employeeName === 'Ivy Ingram') !== undefined,
+);
+assert(
+  'the included sibling correctly attributes back to Payroll Tag Exceptions (checkId 22)',
+  bundlePostFixNumbering.crossCheckRows
+    .find((e) => e.employeeName === 'Ivy Ingram')
+    ?.rows.some((r) => r.checkId === 22 && r.checkName === 'Payroll Tag Exceptions') ?? false,
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${passCount} passed, ${failCount} failed`);

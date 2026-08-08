@@ -1,4 +1,5 @@
-// Check 18 (SES) — Payroll Tag Exception Validation
+// Check 22 (SES) — Payroll Tag Exception Validation (T-670: renumbered from 18,
+// which collided with check18_holidays.ts's canonical FSM/SES-shared id)
 // Exception rows (Payroll Tag contains "EXC") must have dates within the billing period.
 // Payroll Tag format: "2020_PAYROLL_YYYYMMDD" or "2020_PAYROLL_YYYYMMDD_EXC_..."
 // The date portion is the 3rd underscore-separated segment (index 2).
@@ -22,7 +23,7 @@ export function checkSesPayrollTag(
 ): CheckResult {
   if (punchRows.length === 0) {
     return {
-      checkId: 18,
+      checkId: 22, // T-670: was 18 — collided with check18Holidays' canonical FSM/SES-shared id
       checkName: 'Payroll Tag Exceptions',
       status: 'na',
       stats: 'No punch rows uploaded — skipped',
@@ -43,7 +44,7 @@ export function checkSesPayrollTag(
 
   if (validDates.size === 0) {
     return {
-      checkId: 18,
+      checkId: 22,
       checkName: 'Payroll Tag Exceptions',
       status: 'warning',
       stats: 'No non-EXC payroll tags found — cannot determine valid billing period dates',
@@ -63,7 +64,7 @@ export function checkSesPayrollTag(
   const validDatesDisplay = Array.from(validDates).sort().join(', ');
 
   return {
-    checkId: 18,
+    checkId: 22,
     checkName: 'Payroll Tag Exceptions',
     status: flagged.length === 0 ? 'pass' : 'fail',
     stats: flagged.length === 0

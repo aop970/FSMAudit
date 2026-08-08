@@ -26,6 +26,7 @@ import { getAuditRules, initAuditRulesFromServer } from './audit/auditRules';
 import type { AuditPayload, AppState, CheckStatus, ControlTableEntry, TermedPtoRow, TimeOffRow, ParsedData, CiControlEntry, CiParsedData } from './audit/types';
 import { runTieredAnalysis } from './ai/bragiClient';
 import type { EmailEntry } from './ai/bragiClient';
+import { isAiEligible } from './ai/aiGate';
 import type { AnalyzeAllState } from './components/AnalyzeAllButton';
 import { ReviewTab } from './components/ReviewTab';
 import { postRun, isApiConfigured, checkNameToSlug } from './lib/auditApi';
@@ -627,7 +628,7 @@ export default function App() {
           )}
 
           {/* Analyze All — sidebar trigger (visible when key set + failures exist) */}
-          {apiKey.trim() && payload && payload.results.filter((r) => r.status === 'fail' || r.status === 'warning').length >= 2 && (
+          {apiKey.trim() && payload && payload.results.filter((r) => isAiEligible(r.status)).length >= 2 && (
             <div className="rounded-lg px-3 py-2.5" style={{ border: '1px solid color-mix(in srgb, var(--mc-blue) 25%, transparent)', backgroundColor: 'color-mix(in srgb, var(--mc-blue) 6%, transparent)' }}>
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-mc-blue">Bragi Analysis</p>
               {aaState === 'idle' && (

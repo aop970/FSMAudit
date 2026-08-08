@@ -60,10 +60,12 @@ export function buildSynthesisPrompt(
   allResults: CheckResult[],
   parsedData: ParsedData | null,
 ): string {
-  // Build passing check stat lines
+  // T-670: AI analysis (Haiku) now runs on FAIL checks only — WARNING no
+  // longer gets a Haiku pass, but it still needs to show up in the report,
+  // so it's folded into this stats-only section rather than disappearing.
   const passingLines = allResults
-    .filter((r) => r.status === 'pass' || r.status === 'na')
-    .map((r) => `✅ Check ${r.checkId} — ${r.checkName}: ${r.status.toUpperCase()} — ${r.stats}`)
+    .filter((r) => r.status === 'pass' || r.status === 'na' || r.status === 'warning')
+    .map((r) => `${r.status === 'warning' ? '⚠️' : '✅'} Check ${r.checkId} — ${r.checkName}: ${r.status.toUpperCase()} — ${r.stats}`)
     .join('\n');
 
   // Invoice metadata
@@ -81,18 +83,18 @@ Weeks Covered: ${parsedData.weeksCovered.join(', ')}`
   return `Assemble a full audit report from the analysis below. Instructions:
 - Assemble sections in check number order
 - Pass through the Haiku analysis text VERBATIM — do not rephrase or summarize
-- Add a "Summary of Findings" table at the top with columns: Check # | Check Name | Status | Key Finding
-- If any checks failed or warned, add a "Recommended Actions" block at the end
+- Add a "Summary of Findings" table at the top with columns: Check # | Check Name | Status | Key Finding — include EVERY check (pass/na/warning/fail), not just the ones with a Haiku analysis below
+- If any checks failed, add a "Recommended Actions" block at the end. Warnings are listed for reference (stats only, no deep analysis — token-budget policy) — mention them only if directly relevant to a failure's root cause
 - Produce clean GitHub-Flavored Markdown
 - Do NOT add commentary about the assembly process — just produce the report
 
 INVOICE METADATA:
 ${meta}
 
-PASSING / N/A CHECKS:
+PASSING / N/A / WARNING CHECKS (no AI analysis — stats only):
 ${passingLines}
 
-FAILED / WARNING ANALYSIS (from Haiku — reproduce verbatim):
+FAILED CHECK ANALYSIS (from Haiku — reproduce verbatim):
 ${analysisBlocks}`;
 }
 

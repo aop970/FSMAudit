@@ -1,4 +1,6 @@
-// Check 16 (SES) — 2020CO Internal Rows
+// Check 20 (SES) — 2020CO Internal Rows (T-670: renumbered from 16 to sit
+// alongside the other SES-only checks at 20+, leaving 19 reserved for a
+// possible future check19_rosterTab.ts addition to SES)
 // Flag any Detail rows where Client Store ID = "2020CO" — internal corporate entries
 // that should have been removed before invoicing.
 
@@ -10,7 +12,7 @@ export function checkSes2020co(detailRows: LaborRow[]): CheckResult {
   );
 
   return {
-    checkId: 16,
+    checkId: 20, // T-670: was 16 (unused number, but moved for consistency with the other two SES-only checks)
     checkName: '2020CO Internal Rows',
     status: flagged.length === 0 ? 'pass' : 'fail',
     stats: flagged.length === 0

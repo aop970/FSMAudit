@@ -8,6 +8,7 @@ import { getAuditRules } from '../audit/auditRules';
 import { buildContextBundle } from './contextBundle';
 import { buildAssociateSourceSlice } from './sourceSlice';
 import { buildSystemPrompt, buildHaikuPrompt, buildSynthesisPrompt, buildDeepDivePrompt } from './promptTemplates';
+import { isAiEligible } from './aiGate';
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
 const SONNET_MODEL = 'claude-sonnet-4-6';
@@ -117,13 +118,14 @@ export async function runTieredAnalysis(
   const rules = getAuditRules(program);
   const systemBlocks = buildSystemPrompt(rules.bragiSystemPrompt);
 
-  const failedOrWarned = allResults.filter(
-    (r) => r.status === 'fail' || r.status === 'warning',
-  );
+  // T-670: token-budget cut — AI analysis runs on FAIL checks only. A
+  // WARNING is still shown in the report (see buildSynthesisPrompt) but
+  // does not get an AI call; PASS/N/A never did.
+  const failed = allResults.filter((r) => isAiEligible(r.status));
 
-  if (failedOrWarned.length === 0) {
+  if (failed.length === 0) {
     return {
-      reportMarkdown: '## All Checks Passed\n\nNo failures or warnings detected.',
+      reportMarkdown: '## No Failures Detected\n\nAI analysis runs on FAIL checks only — nothing required it. See the summary above for any PASS/WARNING/N/A results.',
       haikuOutputs: [],
       totalInputTokens: 0,
       totalOutputTokens: 0,
@@ -134,10 +136,10 @@ export async function runTieredAnalysis(
   let totalOutput = 0;
   const haikuOutputs: HaikuOutput[] = [];
 
-  // ── Tier 1: Haiku pass over all failed/warned checks ──────────────────
-  for (let i = 0; i < failedOrWarned.length; i++) {
-    const result = failedOrWarned[i];
-    onProgress(`Analyzing ${result.checkName}… ${i + 1} of ${failedOrWarned.length}`);
+  // ── Tier 1: Haiku pass over all FAILED checks ──────────────────────────
+  for (let i = 0; i < failed.length; i++) {
+    const result = failed[i];
+    onProgress(`Analyzing ${result.checkName}… ${i + 1} of ${failed.length}`);
 
     const userPrompt = buildHaikuPrompt(result);
     const callResult = await callClaude(
