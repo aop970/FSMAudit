@@ -17,6 +17,13 @@ function normKey(id: string, name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// Punch: Work only (blank/absent time type counts as Work — parseSesPunchXlsx
+// leaves timeType undefined when the source file has no "Time Type" column).
+function isWorkPunch(r: SesPunchRow): boolean {
+  const t = (r.timeType ?? '').toLowerCase().trim();
+  return !t || t === 'work';
+}
+
 export function check03SesThreeWayRecon(
   detailRows: LaborRow[],
   punchRows: SesPunchRow[],
@@ -36,17 +43,14 @@ export function check03SesThreeWayRecon(
     };
   }
 
-  // Invoice: punch-supported categories only (Work, Admin, Travel, Training)
+  // Invoice: Work only (shift report only captures store visits, not training/travel/admin)
   const invoiceHrs = detailRows.reduce((s, r) => {
     const cat = r.comments.toLowerCase().trim();
     return PUNCH_SUPPORTED.has(cat) ? s + r.timeHours : s;
   }, 0);
 
   // Punch: Work only — shift report only captures store visits
-  const punchHrs = punchRows.reduce((s, r) => {
-    const t = (r.timeType ?? '').toLowerCase().trim();
-    return (!t || t === 'work') ? s + r.timeHours : s;
-  }, 0);
+  const punchHrs = punchRows.reduce((s, r) => (isWorkPunch(r) ? s + r.timeHours : s), 0);
 
   // Shift: actualMinutes ÷ 60 (column Y "Actual Time Entered In Call Report" is in minutes)
   const shiftHrs = shiftRows.reduce((s, r) => s + r.actualMinutes / 60, 0);
@@ -90,6 +94,7 @@ export function check03SesThreeWayRecon(
 
   const punchMap = new Map<string, { name: string; hrs: number }>();
   for (const r of punchRows) {
+    if (!isWorkPunch(r)) continue;
     const k = normKey(r.associateId, r.employeeName);
     const existing = punchMap.get(k);
     if (existing) existing.hrs += r.timeHours;
