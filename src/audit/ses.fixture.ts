@@ -113,7 +113,7 @@ const detailRows: LaborRow[] = [
   invoiceRow('A1', 'Alice Anderson',      40.00, 'Work'),
   invoiceRow('B1', 'Bob Blankfield',      20.00, 'Work'),
   invoiceRow('C1', 'Cara Casewell',       10.00, 'work'),
-  invoiceRow('E1', 'Flora Fabbricatore',  30.00, 'Work'),
+  invoiceRow('E1', 'Fiona Farnsworth',  30.00, 'Work'),
   // Invoice-side non-Work rows are excluded by PUNCH_SUPPORTED — Alice's
   // Training hours must not leak into invoiceHrs.
   invoiceRow('A1', 'Alice Anderson',       6.00, 'Training'),
@@ -128,14 +128,14 @@ const punchRows: SesPunchRow[] = [
   punchRow('C1', 'Cara Casewell',        5.00, 'work'),
   punchRow('D1', 'Dan Dayoff',          12.00, 'Overtime'),
   punchRow('D1', 'Dan Dayoff',           4.00, 'Holiday'),
-  punchRow('E1', 'Flora Fabbricatore',  30.00, 'Work'),
+  punchRow('E1', 'Fiona Farnsworth',  30.00, 'Work'),
 ];
 
 const shiftRows: ShiftRow[] = [
   shiftRow('A1', 'Alice Anderson',      40.00),
   shiftRow('B1', 'Bob Blankfield',      20.00),
   shiftRow('C1', 'Cara Casewell',       10.00),
-  shiftRow('E1', 'Flora Fabbricatore',  22.52),
+  shiftRow('E1', 'Fiona Farnsworth',  22.52),
 ];
 
 // ── Test 1: punch time-type filter parity (T-668) ─────────────────────────────
@@ -160,7 +160,7 @@ assert('Cara not flagged (Work label is case/whitespace insensitive)',         p
 assert('Dan not flagged (non-Work-only associate drops out of the pivot)',     pivotRow(res, 'Dan Dayoff') === undefined);
 
 // The genuine finding must survive.
-const flora = pivotRow(res, 'Flora Fabbricatore');
+const flora = pivotRow(res, 'Fiona Farnsworth');
 assert('Flora still flagged', flora !== undefined);
 assertEq('Flora invoiceVsPunch is clean', flora?.invoiceVsPunch, '0.00');
 assertEq('Flora invoiceVsShift is the real variance', flora?.invoiceVsShift, '7.48');
@@ -208,7 +208,7 @@ const legacyPunch: SesPunchRow[] = [
   punchRow('A1', 'Alice Anderson',     40.00, undefined),
   punchRow('B1', 'Bob Blankfield',     20.00, undefined),
   punchRow('C1', 'Cara Casewell',      10.00, undefined),
-  punchRow('E1', 'Flora Fabbricatore', 30.00, undefined),
+  punchRow('E1', 'Fiona Farnsworth', 30.00, undefined),
 ];
 
 const legacy = check03SesThreeWayRecon(

@@ -856,7 +856,7 @@ assert(
 
 // ── Scenario F (Vera, T-672 review): zero-signal dates are not variance drivers ──
 //
-// Found on Allan's real SES files. Flora Fabbricatore's real variance is driven
+// Found on Allan's real SES files. a real SES associate's variance is driven
 // by 2026-07-01 ALONE (invoice 7.47 / punch 7.47 / shift absent = 7.47 of her
 // 7.48h total). 2026-07-02 has NO Work hours on any leg — it exists in the
 // pivot only because an overnight Travel punch created the date bucket. T-672

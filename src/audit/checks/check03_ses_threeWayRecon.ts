@@ -17,11 +17,41 @@ function normKey(id: string, name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-// Punch: Work only (blank/absent time type counts as Work — parseSesPunchXlsx
-// leaves timeType undefined when the source file has no "Time Type" column).
-function isWorkPunch(r: SesPunchRow): boolean {
+// ── Canonical Check-3 scope predicates — the SINGLE definition ───────────────
+//
+// Check 3 reconciles WORK HOURS ONLY: the shift report captures store visits,
+// not training/travel/admin, so every leg must be narrowed the same way or the
+// legs are not comparable.
+//
+// These are EXPORTED (Vera, T-672 review) because more than one module now
+// aggregates Check-3-scoped hours: the check itself, and sourceSlice.ts's
+// per-date variance pivot. T-668 was exactly this failure one layer up — the
+// total-level figure applied the Work-only punch filter and the per-person
+// pivot did not, so the pivot "explained" a variance the check did not have.
+// T-672 then added a THIRD aggregation (the date pivot) which re-declared the
+// rule locally rather than importing it. It happened to be written correctly
+// and ties out exactly, but nothing structurally PREVENTED it from drifting —
+// a correct copy is still a copy. Any future aggregation of Check 3 hours must
+// import these predicates rather than restate the rule; scopeParity.fixture.ts
+// fails if a copy reappears or if the paths stop agreeing.
+
+/**
+ * Punch rows in Check 3 scope: Work only. A blank/absent time type counts as
+ * Work — parseSesPunchXlsx leaves timeType undefined when the source file has
+ * no "Time Type" column, and those older exports are all-Work by construction.
+ */
+export function isWorkPunch(r: SesPunchRow): boolean {
   const t = (r.timeType ?? '').toLowerCase().trim();
   return !t || t === 'work';
+}
+
+/**
+ * Invoice (labor) rows in Check 3 scope: Work only. Unlike the punch side, a
+ * blank category is NOT treated as Work — an invoice row always carries an
+ * explicit category, so a blank one is malformed rather than implicitly Work.
+ */
+export function isWorkInvoiceRow(r: LaborRow): boolean {
+  return PUNCH_SUPPORTED.has(r.comments.toLowerCase().trim());
 }
 
 export function check03SesThreeWayRecon(
@@ -44,10 +74,7 @@ export function check03SesThreeWayRecon(
   }
 
   // Invoice: Work only (shift report only captures store visits, not training/travel/admin)
-  const invoiceHrs = detailRows.reduce((s, r) => {
-    const cat = r.comments.toLowerCase().trim();
-    return PUNCH_SUPPORTED.has(cat) ? s + r.timeHours : s;
-  }, 0);
+  const invoiceHrs = detailRows.reduce((s, r) => (isWorkInvoiceRow(r) ? s + r.timeHours : s), 0);
 
   // Punch: Work only — shift report only captures store visits
   const punchHrs = punchRows.reduce((s, r) => (isWorkPunch(r) ? s + r.timeHours : s), 0);
@@ -87,8 +114,7 @@ export function check03SesThreeWayRecon(
   // carry a blank one; capturing it off the first row per key is sufficient.
   const invoiceMap = new Map<string, { name: string; id: string; hrs: number }>();
   for (const r of detailRows) {
-    const cat = r.comments.toLowerCase().trim();
-    if (!PUNCH_SUPPORTED.has(cat)) continue;
+    if (!isWorkInvoiceRow(r)) continue;
     const k = normKey(r.associateId, r.employeeName);
     const existing = invoiceMap.get(k);
     if (existing) existing.hrs += r.timeHours;

@@ -16,6 +16,7 @@ import {
   rowMatchesIdentity,
   type AssociateIdentity,
 } from './associateIdentity';
+import { isWorkPunch, isWorkInvoiceRow } from '../audit/checks/check03_ses_threeWayRecon';
 
 // ── Caps — named constants, not magic numbers ───────────────────────────────
 //
@@ -213,7 +214,11 @@ function isCiParsedData(pd: ParsedData | CiParsedData): pd is CiParsedData {
 // reproduce exactly the T-668 bug (a pivot that "explains" a variance the
 // check never actually has, or hides the one it does).
 
-const WORK_CATEGORY = 'work';
+// Scope predicates are IMPORTED from check03, never restated here (Vera,
+// T-672 review). See the block comment on those exports: T-668 was a
+// filter-drift bug between two aggregations of the same rule, and this pivot
+// is the third such aggregation. Reimplementing the rule — even correctly —
+// is what makes drift possible later.
 
 function dateKey(d: Date | null | undefined): string | null {
   if (!d) return null;
@@ -270,7 +275,7 @@ function buildDatePivot(pd: ParsedData, identity: AssociateIdentity, attributabl
   for (const r of laborRows) {
     const k = dateKey(r.visitDate);
     if (!k) continue;
-    if (r.comments.trim().toLowerCase() !== WORK_CATEGORY) continue; // non-Work invoice categories excluded, same as the check's own PUNCH_SUPPORTED
+    if (!isWorkInvoiceRow(r)) continue; // Check 3's own Work-only invoice scope — imported, not restated
     const e = byDate.get(k) ?? newDateAccumEntry();
     e.invoiceSeen = true;
     e.invoiceHours += r.timeHours;
@@ -280,9 +285,8 @@ function buildDatePivot(pd: ParsedData, identity: AssociateIdentity, attributabl
   for (const r of punchRowsForAssoc) {
     const k = dateKey(r.visitDate);
     if (!k) continue;
-    const t = (r.timeType ?? '').toLowerCase().trim();
     const e = byDate.get(k) ?? newDateAccumEntry();
-    if (!t || t === WORK_CATEGORY) {
+    if (isWorkPunch(r)) { // Check 3's own Work-only punch scope — imported, not restated
       e.punchSeen = true;
       e.punchHours += r.timeHours;
     } else {
