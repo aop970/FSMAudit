@@ -19,10 +19,30 @@ const store: Record<string, string> = {};
 // ── Now safe to import audit modules ──────────────────────────────────────────
 
 import { check01Labor } from './checks/check01_labor.js';
+import { check02Formulas } from './checks/check02_formulas.js';
+import { check03PunchRecon } from './checks/check03_punchRecon.js';
+import { check04PunchIntegrity } from './checks/check04_punchIntegrity.js';
+import { check05Management } from './checks/check05_management.js';
+import { check06Cloud } from './checks/check06_cloud.js';
+import { check07OtApproval } from './checks/check07_otApproval.js';
+import { check08Roster } from './checks/check08_roster.js';
+import { check09TieOut } from './checks/check09_tieOut.js';
+import { check10InvoiceIdentity } from './checks/check10_invoiceIdentity.js';
+import { check11DateRange } from './checks/check11_dateRange.js';
+import { check12TimeOff } from './checks/check12_timeOff.js';
+import { check13PoNumber } from './checks/check13_poNumber.js';
+import { check14TermedPto } from './checks/check14_termedPto.js';
+import { check15CustomRules } from './checks/check15_customRules.js';
 import { check16RiSundayPremium } from './checks/check16_riSundayPremium.js';
 import { check17OtMath } from './checks/check17_otMath.js';
+import { check18Holidays } from './checks/check18_holidays.js';
 import { check19RosterTab } from './checks/check19_rosterTab.js';
-import type { LaborRow, RosterEntry } from './types.js';
+import { applyNeverFailPolicy, FSM_FAIL_CAPABLE_CHECK_IDS } from './neverFailPolicy.js';
+import { saveRulesSection, resetSection } from './auditRules.js';
+import type {
+  LaborRow, RosterEntry, PunchRow, MgmtRow, CloudRow,
+  TimeOffRow, TermedPtoRow, TieOutData, ControlTableEntry, CheckResult,
+} from './types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -375,6 +395,225 @@ assert('Orphan premium — Check16 fail', r16orphan.status === 'fail',
 assert('Orphan premium — section=FLAG_ORPHAN_PREMIUM',
   r16orphan.flaggedRows.some((row) => row.section === 'FLAG_ORPHAN_PREMIUM'),
   `flaggedRows sections: ${r16orphan.flaggedRows.map((r) => r.section).join(', ')}`);
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-677 — FSM never-fail policy: per-check proof for all 19 checks
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Allan's ruling (2026-08-09): every FSM check is never-fail EXCEPT Punch
+// Reconciliation, Management Billing Validation, Cloud Services Validation,
+// Invoice Tie-Out, and Formula Compliance (checkIds 3, 5, 6, 9, 2).
+//
+// This section constructs data that makes EACH of the 19 real check
+// functions return 'fail', runs the result through applyNeverFailPolicy for
+// 'fsm', and asserts per-check (not in aggregate) that:
+//   - the 14 non-exempt checks downgrade to 'warning' with flaggedRows/
+//     flaggedCount/stats preserved verbatim, and
+//   - the 5 exempt checks stay 'fail', returned by the SAME object reference
+//     (proving applyNeverFailPolicy makes no unnecessary copy).
+// A checkId/checkName mismatch in the policy would silently leave a check
+// fail-capable (or wrongly downgrade one that should fail) with no runtime
+// error — this is the test that catches it.
+
+console.log('\n=== T-677: FSM never-fail policy — per-check proof (all 19 checks) ===');
+
+function proveDowngrades(label: string, raw: CheckResult): void {
+  assert(`${label} (id ${raw.checkId}) — raw result is FAIL (pre-policy)`, raw.status === 'fail',
+    `got status=${raw.status}`);
+  const [downgraded] = applyNeverFailPolicy([raw], 'fsm');
+  assert(`${label} (id ${raw.checkId}) — downgraded to warning under FSM never-fail policy`,
+    downgraded.status === 'warning', `got status=${downgraded.status}`);
+  assert(`${label} (id ${raw.checkId}) — flaggedCount preserved through downgrade`,
+    downgraded.flaggedCount === raw.flaggedCount,
+    `got ${downgraded.flaggedCount}, expected ${raw.flaggedCount}`);
+  assert(`${label} (id ${raw.checkId}) — flaggedRows preserved through downgrade (full detail, not silenced)`,
+    downgraded.flaggedRows.length === raw.flaggedRows.length && raw.flaggedRows.length > 0,
+    `downgraded=${downgraded.flaggedRows.length}, raw=${raw.flaggedRows.length}`);
+  assert(`${label} (id ${raw.checkId}) — stats text preserved through downgrade`,
+    downgraded.stats === raw.stats);
+}
+
+function proveStillFailCapable(label: string, raw: CheckResult): void {
+  assert(`${label} (id ${raw.checkId}) — raw result is FAIL (pre-policy)`, raw.status === 'fail',
+    `got status=${raw.status}`);
+  const [afterPolicy] = applyNeverFailPolicy([raw], 'fsm');
+  assert(`${label} (id ${raw.checkId}) — status UNCHANGED — fail-capable checkId`,
+    afterPolicy.status === 'fail', `got status=${afterPolicy.status}`);
+  assert(`${label} (id ${raw.checkId}) — same object reference when not downgraded (no unnecessary copy)`,
+    afterPolicy === raw);
+}
+
+// ── The five that STAY fail-capable ─────────────────────────────────────────
+
+// Check 2 — Formula Compliance: hardcoded MU/Bill cells (no muFormula/billFormula).
+const raw02 = check02Formulas([], [makeRow({ comments: 'Work', timeHours: 8, rowNum: 601 })]);
+proveStillFailCapable('Formula Compliance', raw02);
+
+// Check 3 — Punch Reconciliation: labor "Work" hours don't match punch "Work" hours.
+const punch3Labor: LaborRow[] = [makeRow({ comments: 'Work', timeHours: 5, rowNum: 602 })];
+const punch3Punch: PunchRow[] = [{
+  rowNum: 1, employeeName: 'Test Associate', associateId: 'TA001',
+  timeIn: 0, timeOut: 2, timeHours: 2, comments: 'Work', visitDate: null, week: 25,
+}];
+const raw03 = check03PunchRecon([], punch3Labor, punch3Punch);
+proveStillFailCapable('Punch Reconciliation', raw03);
+
+// Check 5 — Management Billing Validation: associate ID absent from control table.
+const mgmt5Row: MgmtRow = {
+  rowNum: 1, week: 25, name: 'No Control', associateId: 'NC001', title: 'X',
+  hours: 10, hourlyRate: 50, total: 500, allocation: 1, totalBill: 500,
+};
+const raw05 = check05Management([mgmt5Row], new Map<string, ControlTableEntry>());
+proveStillFailCapable('Management Billing Validation', raw05);
+
+// Check 6 — Cloud Services Validation: non-manager row billed at 50% allocation (must be 100%).
+const cloud6Row: CloudRow = {
+  rowNum: 1, associateName: 'Cloud Test', associateId: 'CL001', licenseType: 'Standard',
+  quantity: 1, rate: 10, allocation: 0.5, amount: 5,
+};
+const raw06 = check06Cloud([cloud6Row], []);
+proveStillFailCapable('Cloud Services Validation', raw06);
+
+// Check 9 — Invoice Tie-Out: reconstructed vs invoice total variance > $0.03.
+const tieOut9: TieOutData = {
+  fsmITotal: 100, fsmIITotal: 0, fsmIMeritTotal: 0, fsmIIMeritTotal: 0,
+  mgmtTotal: 0, cloudTotal: 0, invoiceTotal: 50, extraLineItems: [],
+};
+const raw09 = check09TieOut(tieOut9);
+proveStillFailCapable('Invoice Tie-Out', raw09);
+
+const failCapableRaws = [raw02, raw03, raw05, raw06, raw09];
+
+// ── The fourteen that DOWNGRADE ─────────────────────────────────────────────
+
+// Check 1 — Labor Billing Validation: FSM II row, muValue doesn't match computed markup.
+const raw01 = check01Labor([], [makeRow({ comments: 'Work', timeHours: 8, rowNum: 611 })]);
+proveDowngrades('Labor Billing Validation', raw01);
+
+// Check 4 — Punch Integrity: PERMANENTLY 'na' in production (see check04_punchIntegrity.ts) —
+// it can never actually reach 'fail' through real invocation, so there is no real fail
+// scenario to construct. Confirm that first, then prove the POLICY's id/name mapping is
+// still correct using a synthetic result shaped exactly like the real one.
+const real04 = check04PunchIntegrity([]);
+assert('Punch Integrity (id 4) — real check is permanently na (cannot naturally fail)',
+  real04.status === 'na', `got status=${real04.status}`);
+const raw04: CheckResult = {
+  checkId: real04.checkId, checkName: real04.checkName, status: 'fail',
+  stats: 'synthetic — see comment above', flaggedCount: 1, flaggedRows: [{ issue: 'synthetic' }],
+};
+proveDowngrades('Punch Integrity', raw04);
+
+// Check 7 — OT Approval (Tiered): 3h Overtime row, no OT Approval tab match, no blanket exception.
+const raw07 = check07OtApproval([], [makeRow({ comments: 'Overtime', timeHours: 3, rowNum: 612, week: 25 })], []);
+proveDowngrades('OT Approval (Tiered)', raw07);
+
+// Check 8 — Roster Validation: labor associateId absent from an empty roster.
+const raw08 = check08Roster([], [makeRow({ comments: 'Work', timeHours: 8, associateId: 'NR001', rowNum: 613 })], []);
+proveDowngrades('Roster Validation', raw08);
+
+// Check 10 — Invoice Identity: tab name AND file name both mismatch the invoice number.
+const raw10 = check10InvoiceIdentity('INV-0001', 'Wrong Tab', 'wrong-file.xlsx');
+proveDowngrades('Invoice Identity', raw10);
+
+// Check 11 — Date Range Validation: visit date falls outside the declared period.
+const raw11 = check11DateRange(
+  [], [makeRow({ comments: 'Work', timeHours: 8, visitDate: new Date(2026, 0, 15), rowNum: 614 })],
+  { start: new Date(2026, 5, 22), end: new Date(2026, 5, 28) },
+);
+proveDowngrades('Date Range Validation', raw11);
+
+// Check 12 — Time Off Validation: report entry has no matching invoice time-off row.
+const timeOff12: TimeOffRow = {
+  rowNum: 1, associateId: 'TO001', workerName: 'Time Off Test',
+  timeOffDate: new Date(2026, 5, 24), totalHours: 8, timeOffType: 'Vacation', status: 'Approved',
+};
+const raw12 = check12TimeOff([], [], [timeOff12], []);
+proveDowngrades('Time Off Validation', raw12);
+
+// Check 13 — PO Number: THE DYNAMIC-NAME CASE. cellValue mismatches configuredPo, so
+// checkName is 'PO Number (E17)' on FSM — matched by checkId 13, not by this string.
+const raw13 = check13PoNumber('WRONG-PO-NUMBER', 'T26C31H000162');
+assert('PO Number — dynamic checkName confirmed (id-keyed, not string-keyed)',
+  raw13.checkName === 'PO Number (E17)', `got checkName="${raw13.checkName}"`);
+proveDowngrades('PO Number (E17)', raw13);
+
+// Check 14 — Termed PTO Validation: payroll payout row with no matching invoice entry.
+const termedPto14: TermedPtoRow = {
+  rowNum: 1, employeeId: 'TP001', worker: 'Termed Pto Test', termDate: new Date(2026, 5, 1),
+  program: 'Samsung Field Sales Manager', name: 'Termed Pto Test', hours: 12,
+};
+const raw14 = check14TermedPto([], [], [], [termedPto14]);
+proveDowngrades('Termed PTO Validation', raw14);
+
+// Check 15 — Custom Rules: an enabled 'positive_hours' rule flags a 0-hour row.
+// getAuditRules() caches after its first call earlier in this file (Robert Selema case),
+// so use saveRulesSection (updates the cache), not a raw localStorage.setItem (which the
+// already-populated cache would silently ignore).
+saveRulesSection('customRules', [
+  { id: 'test-15', name: 'Positive Hours Test', enabled: true, entryTypes: [], ruleType: 'positive_hours' },
+], 'fsm');
+const raw15 = check15CustomRules([], [makeRow({ comments: 'Work', timeHours: 0, rowNum: 615 })]);
+resetSection('customRules', 'fsm');
+proveDowngrades('Custom Rules', raw15);
+
+// Check 16 — RI Sunday Premium Pay: reuse the already-proven "missing premium" fail (r16missing).
+proveDowngrades('RI Sunday Premium Pay', r16missing);
+
+// Check 17 — OT Math Validation: reuse the already-proven "Sunday not excluded" fail (r17wrongB).
+proveDowngrades('OT Math Validation', r17wrongB);
+
+// Check 18 — Holiday Pay Validation: Paid Holiday row on a scheduled date (Memorial Day,
+// 2026-05-25, 8h configured) with the WRONG hours (4 instead of 8). Independently expressed
+// from SES's copy of this same downgrade — see neverFailPolicy.ts and ses.fixture.ts.
+const raw18 = check18Holidays(
+  [], [makeRow({ comments: 'Paid Holiday', timeHours: 4, visitDate: new Date(2026, 4, 25), rowNum: 616 })],
+  'fsm',
+);
+proveDowngrades('Holiday Pay Validation', raw18);
+
+// Check 19 — Roster Tab Placement: reuse the already-proven wrong-tab fail (r19).
+proveDowngrades('Roster Tab Placement', r19);
+
+const downgradedRaws = [
+  raw01, raw04, raw07, raw08, raw10, raw11, raw12, raw13, raw14, raw15,
+  r16missing, r17wrongB, raw18, r19,
+];
+
+// ── Completeness assertion (T-677) ──────────────────────────────────────────
+// Every FSM checkId 1-19 is accounted for EXACTLY ONCE across the two proof
+// lists above, and FSM_FAIL_CAPABLE_CHECK_IDS (the actual policy, imported
+// from source — not re-derived here) matches the five we proved stay
+// fail-capable. This is what catches a future check being silently
+// unaccounted for (a rename, a new check added to runAudit.ts, or a checkId
+// drifting into/out of the policy's exclusion set).
+
+const allProvenIds = [...failCapableRaws, ...downgradedRaws].map((r) => r.checkId).sort((a, b) => a - b);
+const expectedIds = Array.from({ length: 19 }, (_, i) => i + 1);
+assert('T-677 completeness — every FSM checkId 1-19 proven exactly once',
+  JSON.stringify(allProvenIds) === JSON.stringify(expectedIds),
+  `got [${allProvenIds.join(',')}]`);
+
+const failCapableIds = failCapableRaws.map((r) => r.checkId).sort((a, b) => a - b);
+assert('T-677 completeness — FSM_FAIL_CAPABLE_CHECK_IDS matches the five proven fail-capable checks',
+  JSON.stringify([...FSM_FAIL_CAPABLE_CHECK_IDS].sort((a, b) => a - b)) === JSON.stringify(failCapableIds),
+  `policy=[${[...FSM_FAIL_CAPABLE_CHECK_IDS].sort((a, b) => a - b).join(',')}], proven=[${failCapableIds.join(',')}]`);
+
+// checkId <-> checkName pairing for the five fail-capable checks, matching Allan's ruling
+// verbatim ("Punch Reconciliation, Management Billing Validation, Cloud services Validation,
+// Invoice Tie-Out, and Formula Compliance").
+const expectedFailCapableNames: Record<number, string> = {
+  2: 'Formula Compliance',
+  3: 'Punch Reconciliation',
+  5: 'Management Billing Validation',
+  6: 'Cloud Services Validation',
+  9: 'Invoice Tie-Out',
+};
+for (const raw of failCapableRaws) {
+  assert(`T-677 — checkId ${raw.checkId} name matches Allan's ruling`,
+    raw.checkName === expectedFailCapableNames[raw.checkId],
+    `got "${raw.checkName}", expected "${expectedFailCapableNames[raw.checkId]}"`);
+}
 
 
 // ── Summary ────────────────────────────────────────────────────────────────

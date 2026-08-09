@@ -72,9 +72,9 @@ export function runAudit(parsed: ParsedData, controlTable: ControlTableEntry[]):
     check19RosterTab(allFsmI, allFsmII, parsed.rosterEntries),
   ];
 
-  // T-670: wired up alongside the SES never-fail policy so that when Allan
-  // gives the FSM list, adding names to NEVER_FAIL_CHECK_NAMES.fsm is the
-  // entire change — no code edit needed here. Empty set today = no-op.
+  // T-677: Allan's FSM never-fail ruling, applied by exception — every FSM
+  // check is never-fail except the five in FSM_FAIL_CAPABLE_CHECK_IDS
+  // (neverFailPolicy.ts). See that file for the full rationale.
   const results = applyNeverFailPolicy(rawResults, 'fsm');
 
   const period = parsed.declaredPeriod

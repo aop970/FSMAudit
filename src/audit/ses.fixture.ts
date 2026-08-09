@@ -294,16 +294,38 @@ assertEq('Holiday Pay (SES) downgraded to warning', downgradedSesHoliday.status,
 assertEq('Holiday Pay flaggedCount preserved through downgrade', downgradedSesHoliday.flaggedCount, rawSesHoliday.flaggedCount);
 assert('Holiday Pay flaggedRows preserved through downgrade', downgradedSesHoliday.flaggedRows.length > 0);
 
-// THE REGRESSION MOST LIKELY TO SLIP: identical fail-triggering data, but
-// program='fsm' — must NOT be downgraded. Allan has not given the FSM list
-// yet, so NEVER_FAIL_CHECK_NAMES.fsm is empty and this must be a no-op.
+// T-677: Allan has now given the FSM never-fail list ("all with exception
+// of" Punch Reconciliation, Management Billing Validation, Cloud Services
+// Validation, Invoice Tie-Out, Formula Compliance). Holiday Pay Validation
+// (checkId 18) is not one of the five fail-capable checkIds, so FSM Holiday
+// is now DOWNGRADED too — same outcome as SES, but independently expressed:
+// SES's copy is an explicit name-inclusion entry above, FSM's is implicit
+// (absence from FSM_FAIL_CAPABLE_CHECK_IDS), not a shared/merged entry.
+// The exhaustive per-check FSM proof (all 14 downgrade, all 5 still fail)
+// lives in fsm.fixture.ts; this is a targeted sanity check that SES and FSM
+// stay independently correct on the one check both programs share.
 const rawFsmHoliday = check18Holidays([wrongHoursHolidayRow], [], 'fsm');
 assertEq('Holiday Pay (FSM) also fails on the same data (sanity check)', rawFsmHoliday.status, 'fail');
 
-const [notDowngradedFsmHoliday] = applyNeverFailPolicy([rawFsmHoliday], 'fsm');
-assertEq('Holiday Pay (FSM) status UNCHANGED by never-fail policy — FSM list is empty', notDowngradedFsmHoliday.status, 'fail');
-assert('Holiday Pay (FSM) is the exact same object reference when not downgraded (no unnecessary copy)',
-  notDowngradedFsmHoliday === rawFsmHoliday);
+const [downgradedFsmHoliday] = applyNeverFailPolicy([rawFsmHoliday], 'fsm');
+assertEq('Holiday Pay (FSM) downgraded to warning under FSM never-fail policy (T-677)', downgradedFsmHoliday.status, 'warning');
+assertEq('Holiday Pay (FSM) flaggedCount preserved through downgrade', downgradedFsmHoliday.flaggedCount, rawFsmHoliday.flaggedCount);
+assert('Holiday Pay (FSM) flaggedRows preserved through downgrade', downgradedFsmHoliday.flaggedRows.length > 0);
+
+// And the inverse sanity check: a FAIL-CAPABLE FSM checkId (9, Invoice
+// Tie-Out) must NOT be downgraded — same object reference back, no copy.
+const rawFsmTieOut: CheckResult = {
+  checkId: 9,
+  checkName: 'Invoice Tie-Out',
+  status: 'fail',
+  stats: 'Variance exceeds tolerance',
+  flaggedCount: 1,
+  flaggedRows: [{ issue: 'variance' }],
+};
+const [notDowngradedFsmTieOut] = applyNeverFailPolicy([rawFsmTieOut], 'fsm');
+assertEq('Invoice Tie-Out (FSM) status UNCHANGED — fail-capable checkId', notDowngradedFsmTieOut.status, 'fail');
+assert('Invoice Tie-Out (FSM) is the exact same object reference when not downgraded (no unnecessary copy)',
+  notDowngradedFsmTieOut === rawFsmTieOut);
 
 // ── Test 6: checkId renumbering — Store ID Format keeps its own fail behavior ──
 
