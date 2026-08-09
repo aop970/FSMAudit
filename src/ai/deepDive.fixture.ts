@@ -85,9 +85,9 @@ function emptyParsedData(): ParsedData {
 //
 // Alice, Bob, Cara: flagged with modest variance. Dan: large variance (the
 // worst offender — should rank first under severity, even though he appears
-// later in flaggedRows / has a "smaller" name alphabetically). Nine more
+// later in flaggedRows / has a "smaller" name alphabetically). 17 more
 // synthetic associates are added purely to exceed MAX_ASSOCIATES_PER_DEEP_DIVE
-// so the omission-disclosure path fires.
+// (16, T-674) so the omission-disclosure path still fires at the raised cap.
 
 function check3ShapedFlaggedRow(associateId: string, associate: string, invoiceHrs: number, punchHrs: number): Record<string, unknown> {
   const row: Record<string, unknown> = {
@@ -105,18 +105,19 @@ const check3Result: CheckResult = {
   checkName: 'Three-Way Punch Recon',
   status: 'fail',
   stats: 'Variance exceeds tolerance',
-  flaggedCount: 12,
+  flaggedCount: 20,
   flaggedRows: [
     { associate: '— TOTAL —', invoiceHrs: '400.00', punchHrs: '350.00', invoiceVsPunch: '50.00' },
     check3ShapedFlaggedRow('A1', 'Alice Anderson', 40.00, 39.00),   // variance 1.00
     check3ShapedFlaggedRow('B1', 'Bob Blankfield', 20.00, 18.50),   // variance 1.50
     check3ShapedFlaggedRow('D1', 'Dan Dayoff', 30.00, 5.00),        // variance 25.00 — worst offender
-    // 9 filler associates, each with a SMALLER variance (0.1–0.9) than both
-    // Alice (1.00) and Bob (1.50) — pushes total candidates past the cap
-    // while proving severity ranking (not flaggedRows order) decides who's
-    // included: Dan, Bob, and Alice must all outrank most fillers.
-    ...Array.from({ length: 9 }, (_, i) =>
-      check3ShapedFlaggedRow(`F${i}`, `Filler Associate ${i}`, 10.00, 10.00 - 0.1 * (i + 1))),
+    // 17 filler associates, each with a SMALLER variance (0.05–0.85) than both
+    // Alice (1.00) and Bob (1.50) — pushes total candidates (20) past the
+    // raised cap (16, T-674) while proving severity ranking (not flaggedRows
+    // order) decides who's included: Dan, Bob, and Alice must all outrank
+    // every filler, and only the 4 lowest-variance fillers get cut.
+    ...Array.from({ length: 17 }, (_, i) =>
+      check3ShapedFlaggedRow(`F${i}`, `Filler Associate ${i}`, 10.00, 10.00 - 0.05 * (i + 1))),
   ],
 };
 
@@ -126,8 +127,8 @@ console.log('\nAssociate identity extraction (T-669 fix, updated T-672 for ID pr
 
 const identities = extractAssociateIdentities(check3Result.flaggedRows);
 assert(
-  '12 flagged rows -> 12 distinct associate identities (TOTAL row excluded)',
-  identities.length === 12,
+  '20 flagged rows -> 20 distinct associate identities (TOTAL row excluded)',
+  identities.length === 20,
   `got ${identities.length}`,
 );
 // T-672: check03SesThreeWayRecon now emits associateId on every per-person
@@ -220,10 +221,10 @@ assert(
   slice.associates.length === MAX_ASSOCIATES_PER_DEEP_DIVE,
   `got ${slice.associates.length}`,
 );
-assert('12 total candidates recorded (pre-cap)', slice.totalCandidates === 12);
+assert('20 total candidates recorded (pre-cap)', slice.totalCandidates === 20);
 assert(
-  `omittedCount reflects the cut (${12 - MAX_ASSOCIATES_PER_DEEP_DIVE})`,
-  slice.omittedCount === 12 - MAX_ASSOCIATES_PER_DEEP_DIVE,
+  `omittedCount reflects the cut (${20 - MAX_ASSOCIATES_PER_DEEP_DIVE})`,
+  slice.omittedCount === 20 - MAX_ASSOCIATES_PER_DEEP_DIVE,
 );
 assert(
   'Dan Dayoff (worst variance, 25.00h) ranks FIRST — severity ranking, not flaggedRows order',
@@ -262,6 +263,61 @@ assert(
   slice.associates.every((a) => a.identity.displayName !== '— TOTAL —'),
 );
 
+// ── Test 3b: no false truncation claim at/under the cap (T-674 boundary) ────────
+//
+// T-674 raised MAX_ASSOCIATES_PER_DEEP_DIVE 8 -> 16. The disclosure header
+// must never claim an omission that didn't happen — this proves the
+// omittedCount>0 branch in renderSourceSlice only fires strictly above the
+// cap, at exactly the cap (boundary, not off-by-one), and one over it.
+
+console.log('\nTruncation disclosure boundary — under, at, and one-over MAX_ASSOCIATES_PER_DEEP_DIVE');
+
+function smallCheck3Result(count: number): CheckResult {
+  return {
+    checkId: 3,
+    checkName: 'Three-Way Punch Recon',
+    status: 'fail',
+    stats: 'Variance exceeds tolerance',
+    flaggedCount: count,
+    flaggedRows: Array.from({ length: count }, (_, i) =>
+      check3ShapedFlaggedRow(`S${i}`, `Small Associate ${i}`, 10.00, 10.00 - 0.1 * (i + 1))),
+  };
+}
+
+const noOmitBundle = { checkId: 3, checkName: 'Three-Way Punch Recon', ruleText: 'rule text', crossCheckRows: [] };
+
+// Under the cap (5 of 16) — nothing should be reported as omitted.
+const underCapResult = smallCheck3Result(5);
+const underCapSlice = buildAssociateSourceSlice(underCapResult, emptyParsedData());
+assert('under-cap slice includes all 5 associates (nothing to cut)', underCapSlice.associates.length === 5, `got ${underCapSlice.associates.length}`);
+assert('under-cap slice reports zero omitted', underCapSlice.omittedCount === 0, `got ${underCapSlice.omittedCount}`);
+const underCapPrompt = buildDeepDivePrompt(underCapResult, noOmitBundle, underCapSlice);
+assert('under-cap prompt uses the "all N flagged" phrasing, not an omission claim', underCapPrompt.includes('Source rows below for all 5 flagged associate(s).'));
+assert('under-cap prompt does NOT claim any associate was omitted', !/additional associate\(s\) omitted/.test(underCapPrompt));
+
+// Exactly at the cap (16 of 16) — still zero omitted; proves the boundary isn't off-by-one.
+const atCapResult = smallCheck3Result(MAX_ASSOCIATES_PER_DEEP_DIVE);
+const atCapSlice = buildAssociateSourceSlice(atCapResult, emptyParsedData());
+assert(
+  `at-cap slice (exactly ${MAX_ASSOCIATES_PER_DEEP_DIVE}) includes every associate`,
+  atCapSlice.associates.length === MAX_ASSOCIATES_PER_DEEP_DIVE,
+  `got ${atCapSlice.associates.length}`,
+);
+assert('at-cap slice reports zero omitted (boundary, not off-by-one)', atCapSlice.omittedCount === 0, `got ${atCapSlice.omittedCount}`);
+const atCapPrompt = buildDeepDivePrompt(atCapResult, noOmitBundle, atCapSlice);
+assert(
+  `at-cap prompt uses the "all ${MAX_ASSOCIATES_PER_DEEP_DIVE} flagged" phrasing, not an omission claim`,
+  atCapPrompt.includes(`Source rows below for all ${MAX_ASSOCIATES_PER_DEEP_DIVE} flagged associate(s).`),
+);
+assert('at-cap prompt does NOT claim any associate was omitted', !/additional associate\(s\) omitted/.test(atCapPrompt));
+
+// One over the cap — the other side of the boundary; omission must fire for exactly 1.
+const overCapResult = smallCheck3Result(MAX_ASSOCIATES_PER_DEEP_DIVE + 1);
+const overCapSlice = buildAssociateSourceSlice(overCapResult, emptyParsedData());
+assert('one-over-cap slice omits exactly 1', overCapSlice.omittedCount === 1, `got ${overCapSlice.omittedCount}`);
+const overCapPrompt = buildDeepDivePrompt(overCapResult, noOmitBundle, overCapSlice);
+assert('one-over-cap prompt discloses exactly 1 additional associate', overCapPrompt.includes('1 additional associate(s) omitted'));
+
 // ── Test 4: degraded path — parsedData null never crashes, never silently sends nothing ──
 
 console.log('\nDegraded path — parsedData null');
@@ -283,7 +339,7 @@ assert('rendered prompt contains Dan Dayoff (top-ranked associate)', renderedPro
 assert('rendered prompt contains Alice\'s Overtime punch row literally', renderedPrompt.includes('"timeType": "Overtime"'));
 assert(
   'rendered prompt discloses the omitted-associates count',
-  renderedPrompt.includes(`${12 - MAX_ASSOCIATES_PER_DEEP_DIVE} additional associate`),
+  renderedPrompt.includes(`${20 - MAX_ASSOCIATES_PER_DEEP_DIVE} additional associate`),
 );
 assert(
   'rendered prompt discloses Dan\'s trimmed punch rows',

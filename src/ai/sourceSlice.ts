@@ -27,8 +27,12 @@ import { isWorkPunch, isWorkInvoiceRow } from '../audit/checks/check03_ses_three
 // associates that matter most (ranked by severity, not first-N — see
 // rankIdentities below).
 
-/** Max distinct associates included in one Deep Dive's source slice. */
-export const MAX_ASSOCIATES_PER_DEEP_DIVE = 8;
+/** Max distinct associates included in one Deep Dive's source slice.
+ *  8 -> 16 (T-674, Allan-approved): T-671 made source-data Deep Dive the
+ *  default per-check button, so the cap now binds on every click, not just
+ *  an occasional opt-in. Vera measured a cap of 8 omitting 52/60 associates
+ *  on a real 60-associate run; 16 roughly doubles coverage for ~2c more. */
+export const MAX_ASSOCIATES_PER_DEEP_DIVE = 16;
 
 /** Max source rows per associate, per individual source (punch, labor, shift, ...). */
 export const MAX_SOURCE_ROWS_PER_ASSOCIATE_PER_SOURCE = 15;
