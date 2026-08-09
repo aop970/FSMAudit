@@ -8,6 +8,7 @@ import { isAiEligible } from '../ai/aiGate';
 import { loadVerdict, saveVerdict } from '../audit/check07Verdicts';
 import type { UserVerdict } from '../audit/check07Verdicts';
 import { exportCheck7 } from '../audit/check07Export';
+import { unionFlaggedRowColumns } from '../lib/tableColumns';
 
 interface CheckCardProps {
   result: CheckResult;
@@ -387,6 +388,10 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                 (row) => !dismissedCheck19.has(String(row['associateId'] ?? '')),
               );
               const dismissedCount = dismissedCheck19.size;
+              // T-675: union of ALL rows' keys, not just row 0 — a header
+              // derived from a single row silently misaligns every column
+              // once any other row carries a key that one doesn't.
+              const columns = unionFlaggedRowColumns(result.flaggedRows);
               return (
                 <>
                   {result.flaggedRows.length === 0 || visibleRows.length === 0 ? (
@@ -400,7 +405,7 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
-                            {Object.keys(result.flaggedRows[0]).map((k) => (
+                            {columns.map((k) => (
                               <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
                                 {k}
                               </th>
@@ -413,9 +418,9 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                             const rowKey = String(row['associateId'] ?? i);
                             return (
                               <tr key={rowKey} className="border-b last:border-0 hover:bg-mc-blue/5" style={{ borderColor: 'var(--mc-card-border)' }}>
-                                {Object.entries(row).map(([k, v]) => (
+                                {columns.map((k) => (
                                   <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
-                                    {String(v ?? '—')}
+                                    {String(row[k] ?? '—')}
                                   </td>
                                 ))}
                                 <td className="px-3 py-1.5">
@@ -451,37 +456,43 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
             })()
           ) : result.flaggedRows.length === 0 ? (
             <p className="text-xs text-mc-dim">No flagged rows for this check.</p>
-          ) : (
-            <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--mc-card-border)' }}>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
-                    {Object.keys(result.flaggedRows[0]).map((k) => (
-                      <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
-                        {k}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.flaggedRows.slice(0, 200).map((row, i) => (
-                    <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={{ borderColor: 'var(--mc-card-border)' }}>
-                      {Object.entries(row).map(([k, v]) => (
-                        <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
-                          {String(v ?? '—')}
-                        </td>
+          ) : (() => {
+            // T-675: union of ALL rows' keys, not just row 0 (see the
+            // Check-19 block above for the full explanation — this is the
+            // block that rendered Check 3's misaligned table).
+            const columns = unionFlaggedRowColumns(result.flaggedRows);
+            return (
+              <div className="overflow-x-auto rounded border" style={{ borderColor: 'var(--mc-card-border)' }}>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
+                      {columns.map((k) => (
+                        <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                          {k}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {result.flaggedRows.length > 200 && (
-                <p className="px-3 py-2 text-[10px] text-mc-dim">
-                  Showing 200 of {result.flaggedRows.length} rows
-                </p>
-              )}
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {result.flaggedRows.slice(0, 200).map((row, i) => (
+                      <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={{ borderColor: 'var(--mc-card-border)' }}>
+                        {columns.map((k) => (
+                          <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
+                            {String(row[k] ?? '—')}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {result.flaggedRows.length > 200 && (
+                  <p className="px-3 py-2 text-[10px] text-mc-dim">
+                    Showing 200 of {result.flaggedRows.length} rows
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Analyze with Bragi — T-671: single button, source-data-backed
               (was two buttons: a Haiku flagged-rows-only summary here, plus

@@ -4,6 +4,7 @@
 import { FileText } from 'lucide-react';
 import type { AuditPayload } from '../audit/types';
 import { fmtMoney } from '../lib/num';
+import { unionFlaggedRowColumns } from '../lib/tableColumns';
 
 interface DownloadPDFProps {
   payload: AuditPayload;
@@ -139,7 +140,9 @@ export function DownloadPDF({ payload }: DownloadPDFProps) {
         });
 
         if (r.flaggedRows.length > 0) {
-          const columns = Object.keys(r.flaggedRows[0]);
+          // T-675: union of ALL rows' keys, not just row 0 — see
+          // tableColumns.ts for why row-0-only derivation is unsafe.
+          const columns = unionFlaggedRowColumns(r.flaggedRows);
           const colWidths = columns.map(() => `${Math.floor(100 / columns.length)}%`);
 
           const headerRow = columns.map((col) => ({

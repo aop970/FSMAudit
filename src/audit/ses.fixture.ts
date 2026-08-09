@@ -33,6 +33,7 @@ import { check18Holidays } from './checks/check18_holidays.js';
 import { runSesAudit } from './runSesAudit.js';
 import { applyNeverFailPolicy } from './neverFailPolicy.js';
 import { isAiEligible, countAiEligible, shouldShowAnalyzeAll, MIN_AI_ELIGIBLE_FOR_ANALYZE_ALL } from '../ai/aiGate.js';
+import { unionFlaggedRowColumns } from '../lib/tableColumns.js';
 import type { LaborRow, SesPunchRow, ShiftRow, ParsedData, ControlTableEntry, CheckResult } from './types.js';
 
 // ── Assertion plumbing ────────────────────────────────────────────────────────
@@ -422,6 +423,123 @@ assert(
   'a run with ZERO eligible checks still correctly does NOT show Analyze All',
   shouldShowAnalyzeAll(singleFailMixedResults.filter((r) => r.status !== 'fail')) === false,
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-675 — header/row-width parity (the Allan-visible column-shift bug)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Allan's screenshot: Check 3's table rendered employee IDs under the
+// PUNCHHRS header, every value shifted one column right, plus an extra
+// unlabeled trailing column. Root cause: the summary ('— TOTAL —') row never
+// carried associateId while per-person rows did (T-672 added it only to the
+// latter) — 7 header keys (from row 0, the summary) against 8 values per
+// person row. Two independent fixes, both tested here: (1)
+// check03SesThreeWayRecon now gives every row — summary included — the exact
+// same key set in the exact same order; (2) unionFlaggedRowColumns (the
+// shared helper all four render sites now use) derives headers from every
+// row, not just row 0, so even a genuinely shape-divergent check (see part B)
+// renders correctly.
+
+// ── Test 8a: check03's real output has uniform row shape (summary === detail) ──
+
+console.log('\nCheck 3 (SES) — row-shape parity across summary and detail rows (T-675)');
+
+const parityDetailRows: LaborRow[] = [
+  // Gwen: no associateId anywhere — normKey falls back to name matching,
+  // same as before T-672. Her row must still carry a real (blank) associateId
+  // key, not have it omitted.
+  invoiceRow('', 'Gwen Galloway', 20.00, 'Work'),
+  // Henry: real associateId on every source, like check03 emits for a normal
+  // ID-matched associate.
+  invoiceRow('H1', 'Henry Holt', 10.00, 'Work'),
+];
+const parityPunchRows: SesPunchRow[] = [
+  punchRow('', 'Gwen Galloway', 15.00, 'Work'),
+  punchRow('H1', 'Henry Holt', 10.00, 'Work'),
+];
+const parityShiftRows: ShiftRow[] = [
+  shiftRow('', 'Gwen Galloway', 15.00),
+  shiftRow('H1', 'Henry Holt', 5.00),
+];
+
+const parityRes = check03SesThreeWayRecon(parityDetailRows, parityPunchRows, parityShiftRows);
+assertEq('parity fixture status is fail (total variance exceeds tolerance)', parityRes.status, 'fail');
+assertEq('parity fixture flags both associates', parityRes.flaggedCount, 2);
+assertEq('parity fixture has 3 flagged rows (TOTAL + Gwen + Henry)', parityRes.flaggedRows.length, 3);
+
+const parityColumns = unionFlaggedRowColumns(parityRes.flaggedRows);
+assert(
+  'associateId is a real column, positioned immediately after associate (Allan/Bragi decision)',
+  parityColumns[0] === 'associate' && parityColumns[1] === 'associateId',
+  `got [${parityColumns.slice(0, 2).join(', ')}]`,
+);
+
+// The actual regression: every row — including the summary — has EXACTLY the
+// same key count as the union column list. Pre-fix, the summary row had 7
+// keys against detail rows' 8, so this would fail with 7 !== 8.
+for (const row of parityRes.flaggedRows) {
+  assertEq(
+    `row "${row.associate}" has exactly ${parityColumns.length} keys (== column count, no misalignment)`,
+    Object.keys(row).length,
+    parityColumns.length,
+  );
+}
+
+const HOURS_RE = /^-?\d+\.\d{2}$/;
+const gwenParityRow = parityRes.flaggedRows.find((r) => r.associate === 'Gwen Galloway');
+const henryParityRow = parityRes.flaggedRows.find((r) => r.associate === 'Henry Holt');
+const totalParityRow = parityRes.flaggedRows.find((r) => r.associate === '— TOTAL —');
+
+assertEq('Gwen (no ID anywhere) has a blank associateId — never omitted, never guessed', gwenParityRow?.associateId, '');
+assertEq('Henry has his real associateId', henryParityRow?.associateId, 'H1');
+assertEq('summary row also has a blank associateId (same key, same position as detail rows)', totalParityRow?.associateId, '');
+
+// The literal bug Allan saw: an ID rendered where PUNCHHRS should be. Prove
+// the column at the associateId position is never an hours-shaped value for
+// Henry, and the column at the punchHrs position is never his ID.
+assert(
+  "Henry's associateId column holds his ID, not an hours value",
+  henryParityRow?.associateId === 'H1' && !HOURS_RE.test(String(henryParityRow?.associateId)),
+);
+assert(
+  "Henry's punchHrs column holds real hours, not his associateId",
+  HOURS_RE.test(String(henryParityRow?.punchHrs)) && henryParityRow?.punchHrs !== 'H1',
+);
+
+// ── Test 8b: unionFlaggedRowColumns handles a genuinely shape-divergent check ──
+//
+// Not a check03 fixture — a synthetic stand-in for the OTHER real instance
+// found in the T-675 blast-radius sweep: check07_otApproval.ts's `allDetails`
+// concatenates blanketApproved/tabApproved/flagged rows that differ in
+// exactly this way (blanketApproved has no `severity`, tabApproved has no
+// `approved`/`issue`, only `flagged` has all three). Proves the render-layer
+// fix covers that class of bug generically, without needing a per-check fix.
+
+console.log('\nunionFlaggedRowColumns — genuinely shape-divergent rows (T-675, generic defect class)');
+
+const heterogeneousRows: Record<string, unknown>[] = [
+  { section: 'blanket', rowKey: 'A', associateId: 'X1', name: 'Foo Fillerson', hours: '5.00', tier: 'Blanket', status: 'blanket', issue: 'blanket-approved' },
+  { section: 'tabApproved', rowKey: 'B', associateId: 'X2', name: 'Bar Blankerson', hours: '6.00', tier: 'Needs DL Approval', status: 'tab_approved', severity: 'orange' },
+  { section: 'flagged', rowKey: 'C', associateId: 'X3', name: 'Baz Bazerson', hours: '7.00', tier: 'Needs Exec Approval', status: 'none', severity: 'red', approved: false, issue: 'no match' },
+];
+
+const heteroColumns = unionFlaggedRowColumns(heterogeneousRows);
+assertEq(
+  'union columns = first-seen union across ALL rows (8 from row 0 + severity from row 1 + approved from row 2 = 10)',
+  heteroColumns.length,
+  10,
+);
+assert('row-0-only derivation (the pre-fix bug) would have UNDER-counted the columns', Object.keys(heterogeneousRows[0]).length < heteroColumns.length);
+
+// Simulate the actual render (header = heteroColumns, each cell = row[col] ?? placeholder)
+// and confirm every cell lands under its own header — the fix that replaced
+// Object.entries(row) (row's OWN key order) at all four render sites.
+const severityIdx = heteroColumns.indexOf('severity');
+const approvedIdx = heteroColumns.indexOf('approved');
+const issueIdx = heteroColumns.indexOf('issue');
+assert('blanket row (no severity key) renders blank at the severity column, not a shifted value', heterogeneousRows[0][heteroColumns[severityIdx]] === undefined);
+assert('tabApproved row (no approved/issue keys) renders blank at both, not shifted values', heterogeneousRows[1][heteroColumns[approvedIdx]] === undefined && heterogeneousRows[1][heteroColumns[issueIdx]] === undefined);
+assert('flagged row (has every key) renders its real severity/approved/issue values under the right headers', heterogeneousRows[2][heteroColumns[severityIdx]] === 'red' && heterogeneousRows[2][heteroColumns[approvedIdx]] === false && heterogeneousRows[2][heteroColumns[issueIdx]] === 'no match');
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 

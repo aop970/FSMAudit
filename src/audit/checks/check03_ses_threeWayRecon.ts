@@ -166,11 +166,20 @@ export function check03SesThreeWayRecon(
 
     if (!personFail) continue;
 
+    // T-675: associateId is a REAL column, positioned right after `associate`
+    // (Allan/Bragi decision — the name and its ID read naturally together),
+    // and is ALWAYS present (blank string when no source row for this
+    // associate carried one), never conditionally added. The summary row
+    // below carries the same key in the same position for exactly the same
+    // reason: two rows in one flaggedRows array with different key sets is
+    // what produced the header/value misalignment Allan saw (EE020724 under
+    // PUNCHHRS) — row shape must be uniform across summary and detail rows,
+    // not just internally consistent within each.
     const entry: Record<string, unknown> = {
       associate: name,
+      associateId: id,
       invoiceHrs: inv.toFixed(2),
     };
-    if (id) entry.associateId = id;
     if (!noPunch) {
       entry.punchHrs = pch.toFixed(2);
       entry.invoiceVsPunch = (inv - pch).toFixed(2);
@@ -185,9 +194,12 @@ export function check03SesThreeWayRecon(
     personRows.push(entry);
   }
 
-  // Summary row always first
+  // Summary row always first. associateId is blank (never omitted) so its key
+  // position matches every per-person row — see the entry-building comment
+  // above (T-675).
   const summaryRow: Record<string, unknown> = {
     associate: '— TOTAL —',
+    associateId: '',
     invoiceHrs: invoiceHrs.toFixed(2),
   };
   if (!noPunch) {

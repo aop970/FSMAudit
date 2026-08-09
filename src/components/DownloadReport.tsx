@@ -1,6 +1,7 @@
 import { Download } from 'lucide-react';
 import type { AuditPayload } from '../audit/types';
 import { fmtMoney } from '../lib/num';
+import { unionFlaggedRowColumns } from '../lib/tableColumns';
 
 interface DownloadReportProps {
   payload: AuditPayload;
@@ -45,7 +46,11 @@ export function DownloadReport({ payload }: DownloadReportProps) {
     for (const r of payload.results) {
       if (r.flaggedRows.length === 0) continue;
       rows.push(`FAILURES: ${r.checkName}`);
-      const keys = Object.keys(r.flaggedRows[0]);
+      // T-675: union of ALL rows' keys, not just row 0 — row 0 (e.g. Check
+      // 3's '— TOTAL —' summary row) can lack a key that later rows carry
+      // (associateId), which silently dropped that column from the CSV
+      // export entirely rather than just misaligning it on screen.
+      const keys = unionFlaggedRowColumns(r.flaggedRows);
       rows.push(keys.join(','));
       for (const row of r.flaggedRows) {
         rows.push(keys.map((k) => `"${String(row[k] ?? '').replace(/"/g, '""')}"`).join(','));
