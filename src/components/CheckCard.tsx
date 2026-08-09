@@ -220,6 +220,20 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
 
               // Display columns for actionable rows (hide internal fields)
               const HIDDEN_COLS = new Set(['section', 'severity', 'approved', 'issue', 'status']);
+              // T-675 (Vera review): this is the FIFTH flaggedRows render site —
+              // it was left on the row-0 + Object.entries(row) pattern the rest
+              // of T-675 removed. It happens to be safe today only because
+              // `actionableRows` filters check07's flaggedRows down to the
+              // single homogeneous `flagged[]` array (blanket/tabApproved rows,
+              // which carry a different key set, are filtered out), and because
+              // HIDDEN_COLS hides the very keys that diverge. Both are
+              // incidental, not structural: widen the filter, or add a
+              // conditional key to the flagged push, and this table silently
+              // misaligns exactly like Check 3 did. Use the shared helper here
+              // too so the defect class is closed everywhere, not almost
+              // everywhere.
+              const actionableColumns = unionFlaggedRowColumns(actionableRows)
+                .filter((k) => !HIDDEN_COLS.has(k));
 
               return (
                 <div className="space-y-3">
@@ -289,13 +303,11 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                       <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b" style={{ borderColor: 'var(--mc-card-border)', backgroundColor: 'rgba(13, 17, 32, 0.9)' }}>
-                            {Object.keys(actionableRows[0])
-                              .filter((k) => !HIDDEN_COLS.has(k))
-                              .map((k) => (
-                                <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
-                                  {k === 'approvalDetail' ? 'Approval Detail' : k}
-                                </th>
-                              ))}
+                            {actionableColumns.map((k) => (
+                              <th key={k} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
+                                {k === 'approvalDetail' ? 'Approval Detail' : k}
+                              </th>
+                            ))}
                             <th className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-mc-dim">
                               Verdict
                             </th>
@@ -320,13 +332,11 @@ export function CheckCard({ result, allResults, defaultOpen = false, apiKey, pro
                             };
                             return (
                               <tr key={i} className="border-b last:border-0 hover:bg-mc-blue/5" style={rowStyle}>
-                                {Object.entries(row)
-                                  .filter(([k]) => !HIDDEN_COLS.has(k))
-                                  .map(([k, v]) => (
-                                    <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
-                                      {String(v ?? '—')}
-                                    </td>
-                                  ))}
+                                {actionableColumns.map((k) => (
+                                  <td key={k} className="px-3 py-1.5 font-mono text-mc-text">
+                                    {String(row[k] ?? '—')}
+                                  </td>
+                                ))}
                                 {/* Verdict controls */}
                                 <td className="px-3 py-1.5">
                                   <div className="flex items-center gap-1.5">

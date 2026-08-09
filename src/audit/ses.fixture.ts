@@ -34,7 +34,13 @@ import { runSesAudit } from './runSesAudit.js';
 import { applyNeverFailPolicy } from './neverFailPolicy.js';
 import { isAiEligible, countAiEligible, shouldShowAnalyzeAll, MIN_AI_ELIGIBLE_FOR_ANALYZE_ALL } from '../ai/aiGate.js';
 import { unionFlaggedRowColumns } from '../lib/tableColumns.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { LaborRow, SesPunchRow, ShiftRow, ParsedData, ControlTableEntry, CheckResult } from './types.js';
+
+/** Repo `src/` root — this file lives at src/audit/, so one level up. */
+const FIXTURE_SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // ── Assertion plumbing ────────────────────────────────────────────────────────
 
@@ -540,6 +546,75 @@ const issueIdx = heteroColumns.indexOf('issue');
 assert('blanket row (no severity key) renders blank at the severity column, not a shifted value', heterogeneousRows[0][heteroColumns[severityIdx]] === undefined);
 assert('tabApproved row (no approved/issue keys) renders blank at both, not shifted values', heterogeneousRows[1][heteroColumns[approvedIdx]] === undefined && heterogeneousRows[1][heteroColumns[issueIdx]] === undefined);
 assert('flagged row (has every key) renders its real severity/approved/issue values under the right headers', heterogeneousRows[2][heteroColumns[severityIdx]] === 'red' && heterogeneousRows[2][heteroColumns[approvedIdx]] === false && heterogeneousRows[2][heteroColumns[issueIdx]] === 'no match');
+
+// ── Test 8c: no render site may derive headers from row 0 (T-675, Vera gate) ──
+//
+// Test 8b proves the HELPER is correct. It does not prove every render site
+// USES it — and at the T-675 gate one did not: CheckCard.tsx's Check-7 verdict
+// table was still on `Object.keys(actionableRows[0])` + `Object.entries(row)`,
+// the exact pattern the rest of T-675 removed. It was safe only incidentally
+// (its filter narrows check07's flaggedRows to the single homogeneous
+// `flagged[]` array, and HIDDEN_COLS hides the keys that diverge), so nothing
+// structural would have caught it drifting back.
+//
+// This is the same "a correct copy is still a copy" guard scopeParity.fixture
+// applies to the Check-3 scope predicates: assert against the SOURCE that no
+// flaggedRows-rendering module re-derives columns locally. Grepping source is
+// deliberate — it fails when someone reintroduces the pattern, not merely when
+// a specific check's data happens to expose it.
+
+console.log('\nRender-site drift guard — no local row-0 header derivation (T-675)');
+
+const RENDER_SITES = [
+  'components/CheckCard.tsx',
+  'components/DownloadReport.tsx',
+  'components/DownloadPDF.tsx',
+];
+
+// `Object.keys(<anything>[0])` — header derivation from a single row.
+const ROW0_HEADER_RE = /Object\.keys\(\s*[A-Za-z_$][\w$.]*\s*\[\s*0\s*\]\s*\)/;
+// `Object.entries(row)` / `Object.entries(r)` — cell rendering in the row's
+// OWN key order rather than by indexing the shared column list.
+const ROW_ENTRIES_RE = /Object\.entries\(\s*(?:row|r)\s*\)/;
+
+/**
+ * Strip comments so the guard matches CODE, not prose. Without this, the very
+ * comment explaining the banned pattern trips the guard that bans it (caught
+ * on this fixture's first run). Removes block comments (incl. JSX `{/* … *\/}`)
+ * and whole-line `//` / ` * ` comment lines; deliberately does NOT strip
+ * trailing `//` comments, which would risk mangling string literals like
+ * "https://…" — a banned pattern hiding in a trailing comment is not a
+ * realistic drift mode, whereas a comment block describing it demonstrably is.
+ */
+function stripComments(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      return !t.startsWith('//') && !t.startsWith('*');
+    })
+    .join('\n');
+}
+
+for (const rel of RENDER_SITES) {
+  const raw = readFileSync(join(FIXTURE_SRC_ROOT, rel), 'utf8');
+  const src = stripComments(raw);
+  assert(
+    `${rel} imports the shared unionFlaggedRowColumns helper`,
+    /import\s*\{[^}]*unionFlaggedRowColumns[^}]*\}\s*from\s*['"][^'"]*tableColumns['"]/.test(src),
+  );
+  assert(
+    `${rel} has NO row-0 header derivation (Object.keys(x[0]))`,
+    !ROW0_HEADER_RE.test(src),
+    'Derive columns with unionFlaggedRowColumns(rows) instead of Object.keys(rows[0]).',
+  );
+  assert(
+    `${rel} has NO per-row Object.entries() cell rendering`,
+    !ROW_ENTRIES_RE.test(src),
+    'Render cells by indexing the shared column list (row[col] ?? placeholder), not the row\'s own key order.',
+  );
+}
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
