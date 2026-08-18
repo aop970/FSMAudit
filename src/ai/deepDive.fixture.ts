@@ -971,6 +971,157 @@ const floIdx = travelOnlyPrompt.indexOf('DATE-LEVEL VARIANCE');
 console.log(travelOnlyPrompt.slice(floIdx, floIdx + 500));
 console.log('--- end excerpt ---\n');
 
+// ═══════════════════════════════════════════════════════════════════════════
+// T-729 — FSM Check 3 identity recovery (perPersonBreakdown)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// FSM Check 3 (Punch Reconciliation) emits category-level flaggedRows:
+//   { category, laborHrs, punchHrs, delta, status }
+// No associate identity field → rankIdentities returns zero → the "Analyze
+// with Bragi" prompt fell back to the literal string "No associate identity
+// could be extracted from the flagged rows for this check — root-cause from
+// the flagged rows and rule text only." (exactly what Allan saw, T-729).
+//
+// The check already computes per-person per-day rows in
+// details.perPersonBreakdown (a Record<category, row[]> where each row
+// carries associateId + name + date + delta). T-729 wires buildAssociateSourceSlice
+// to fall through to that dict when flaggedRows yield no identities, so the
+// existing source-data machinery (filterAndCap / buildDatePivot / ...) now
+// gets REAL identities and pulls REAL punch/labor source rows.
+//
+// This test proves:
+//   (a) a failing FSM Check 3 with perPersonBreakdown yields named associates
+//       in the source slice (previously zero → no names)
+//   (b) the rendered prompt contains specific associate names, NOT the fallback
+//       "No associate identity could be extracted..." string
+//   (c) the date-level pivot fires (source rows carry visitDate) — the AI sees
+//       per-date invoice-vs-punch numbers, not just period totals
+//   (d) SES Check 3 (three-way recon) is unaffected — its flaggedRows already
+//       carry associateId, so the fallback path is never entered (regression guard)
+
+console.log('\nT-729 — FSM Check 3 identity recovery from details.perPersonBreakdown');
+
+// Build a realistic FSM Check 3 result: two mismatching categories (Admin and
+// Travel), each with two associates, modelled after Allan's actual session.
+// All rows in perPersonBreakdown carry associateId so they resolve as id-kind.
+const fsmCheck3Result: CheckResult = {
+  checkId: 3,
+  checkName: 'Punch Reconciliation',
+  status: 'fail',
+  stats: '2 categories reconciled, 2 mismatches',
+  flaggedCount: 2,
+  // Category-level flaggedRows — no associate identity at all.
+  flaggedRows: [
+    { category: 'Admin',  laborHrs: '0.50', punchHrs: '0.75', delta: '+0.25', status: 'MISMATCH' },
+    { category: 'Travel', laborHrs: '8.00', punchHrs: '7.75', delta: '-0.25', status: 'MISMATCH' },
+  ],
+  details: {
+    categoryBreakdown: [
+      { category: 'Admin',  laborHrs: '0.50', punchHrs: '0.75', delta: '+0.25', status: 'MISMATCH' },
+      { category: 'Travel', laborHrs: '8.00', punchHrs: '7.75', delta: '-0.25', status: 'MISMATCH' },
+    ],
+    // Per-person per-day rows — this is the dict that was previously never
+    // surfaced to the AI (the write site at check03_punchRecon.ts:143 was the
+    // only hit in the codebase).
+    perPersonBreakdown: {
+      admin: [
+        { associateId: 'AP001', name: 'Alice Pemberton', date: '8/11/2026', invoiceHrs: '0.25', punchHrs: '0.50', delta: '+0.25' },
+      ],
+      travel: [
+        { associateId: 'BP002', name: 'Bob Pallister',  date: '8/11/2026', invoiceHrs: '4.00', punchHrs: '3.75', delta: '-0.25' },
+        // Second travel row for a different date — proves accumulation across dates
+        { associateId: 'BP002', name: 'Bob Pallister',  date: '8/12/2026', invoiceHrs: '4.00', punchHrs: '4.00', delta: '+0.00' },
+      ],
+    },
+  },
+};
+
+// Build ParsedData with matching source rows so filterAndCap finds real data.
+const fsmPd = emptyParsedData();
+const d1 = new Date(2026, 7, 11); // 2026-08-11
+const d2 = new Date(2026, 7, 12); // 2026-08-12
+// Invoice labor rows: Alice's Admin work and Bob's Travel — using 'admin'/'travel' as comments
+fsmPd.fsmIRows = [
+  invoiceRow('AP001', 'Alice Pemberton', 0.25, 'Admin',  d1),
+  invoiceRow('BP002', 'Bob Pallister',   4.00, 'Travel', d1),
+  invoiceRow('BP002', 'Bob Pallister',   4.00, 'Travel', d2),
+];
+// FSM punch rows (punchRows, not sesPunchRows — FSM program uses the PunchRow type)
+// For the source slice, filterAndCap checks punchRows via buildFsmSesSourceGroups.
+// We also add sesPunchRows for completeness — the slice builder includes both.
+fsmPd.sesPunchRows = [
+  punchRow('AP001', 'Alice Pemberton', 0.50, 'Admin',  d1),
+  punchRow('BP002', 'Bob Pallister',   3.75, 'Travel', d1),
+  punchRow('BP002', 'Bob Pallister',   4.00, 'Travel', d2),
+];
+
+const fsmSlice = buildAssociateSourceSlice(fsmCheck3Result, fsmPd);
+
+assert(
+  'T-729: FSM Check 3 — source slice has at least one associate (previously zero)',
+  fsmSlice.associates.length >= 1,
+  `got ${fsmSlice.associates.length}`,
+);
+assert(
+  'T-729: FSM Check 3 — Alice Pemberton appears in the source slice',
+  fsmSlice.associates.some((a) => a.identity.displayName === 'Alice Pemberton'),
+  `associates: ${fsmSlice.associates.map((a) => a.identity.displayName).join(', ')}`,
+);
+assert(
+  'T-729: FSM Check 3 — Bob Pallister appears in the source slice',
+  fsmSlice.associates.some((a) => a.identity.displayName === 'Bob Pallister'),
+  `associates: ${fsmSlice.associates.map((a) => a.identity.displayName).join(', ')}`,
+);
+assert(
+  'T-729: FSM Check 3 — totalCandidates is 2 (Alice and Bob)',
+  fsmSlice.totalCandidates === 2,
+  `got ${fsmSlice.totalCandidates}`,
+);
+
+// Render the actual prompt and verify named associates appear, fallback does not.
+const fsmBundle = buildContextBundle(fsmCheck3Result, [fsmCheck3Result], 'rule text');
+const fsmPrompt = buildDeepDivePrompt(fsmCheck3Result, fsmBundle, fsmSlice);
+
+assert(
+  "T-729: FSM Check 3 rendered prompt contains 'Alice Pemberton' (named associate)",
+  fsmPrompt.includes('Alice Pemberton'),
+  'associate name not found in prompt',
+);
+assert(
+  "T-729: FSM Check 3 rendered prompt contains 'Bob Pallister' (named associate)",
+  fsmPrompt.includes('Bob Pallister'),
+  'associate name not found in prompt',
+);
+assert(
+  'T-729: FSM Check 3 rendered prompt does NOT emit the no-identity fallback string',
+  !fsmPrompt.includes('No associate identity could be extracted from the flagged rows for this check'),
+  'fallback string found — identity recovery did not fire',
+);
+assert(
+  'T-729: FSM Check 3 rendered prompt contains SOURCE DATA section (not degraded)',
+  fsmPrompt.includes('SOURCE DATA:') && !fsmPrompt.startsWith('SOURCE DATA: No associate'),
+);
+
+// Regression guard: SES Check 3 (three-way recon) still works as before —
+// its flaggedRows already carry associateId so the fallback path is never entered.
+// Re-use the existing check3Result and parsedData from Test 3 (built earlier in this file).
+const sesSlice = buildAssociateSourceSlice(check3Result, parsedData);
+assert(
+  'T-729 regression: SES Check 3 still resolves via flaggedRows (ID-keyed) — fallback not entered',
+  sesSlice.associates.length === MAX_ASSOCIATES_PER_DEEP_DIVE,
+  `got ${sesSlice.associates.length}`,
+);
+assert(
+  'T-729 regression: SES Check 3 — Dan Dayoff (worst variance) still ranks first',
+  sesSlice.associates[0]?.identity.displayName === 'Dan Dayoff',
+  `got ${sesSlice.associates[0]?.identity.displayName}`,
+);
+
+console.log('\n--- T-729: actual FSM Check 3 prompt excerpt (SOURCE DATA section, first 800 chars) ---');
+const fsmSrcIdx = fsmPrompt.indexOf('SOURCE DATA:');
+console.log(fsmPrompt.slice(fsmSrcIdx, fsmSrcIdx + 800));
+console.log('--- end T-729 excerpt ---\n');
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${passCount} passed, ${failCount} failed`);

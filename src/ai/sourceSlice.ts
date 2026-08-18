@@ -393,6 +393,36 @@ function buildCiSourceGroups(pd: CiParsedData, identity: AssociateIdentity): Sou
 // ── Entry point ──────────────────────────────────────────────────────────
 
 /**
+ * Flatten a `details.perPersonBreakdown` dict (category → row[]) into a
+ * single list of rows for identity extraction. This is the recovery path for
+ * checks (FSM Check 3 — Punch Reconciliation) whose `flaggedRows` contain
+ * only category-level aggregate rows with no associate identity, while the
+ * per-person detail lives in `details.perPersonBreakdown` — a dict keyed by
+ * category, each value being an array of rows with `associateId` / `name` /
+ * `date` / `delta` fields. Ranking uses the existing `delta` key, which
+ * matches VARIANCE_KEY_RE, so severity ordering is by largest absolute delta
+ * across a person's rows (largest contributor ranks first, same as the normal
+ * path). Returns an empty array when the field is absent or empty so the
+ * caller can decide how to degrade.
+ */
+function flattenPerPersonBreakdown(details: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  if (!details) return [];
+  const ppb = details['perPersonBreakdown'];
+  if (!ppb || typeof ppb !== 'object' || Array.isArray(ppb)) return [];
+  const out: Record<string, unknown>[] = [];
+  for (const v of Object.values(ppb as Record<string, unknown>)) {
+    if (Array.isArray(v)) {
+      for (const row of v) {
+        if (row && typeof row === 'object' && !Array.isArray(row)) {
+          out.push(row as Record<string, unknown>);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Build the associate-scoped source-row slice for a Deep Dive.
  *
  * Handles both program shapes: ParsedData (FSM/SES) and CiParsedData (CI) —
@@ -401,12 +431,30 @@ function buildCiSourceGroups(pd: CiParsedData, identity: AssociateIdentity): Sou
  * nothing) when parsedData is null — e.g. a session where the source files
  * were never held in memory (shouldn't happen in the live app, but a
  * fixture/test can construct this).
+ *
+ * T-729 — FSM Check 3 identity recovery: when flaggedRows yield zero
+ * identities (they are category-level aggregate rows) AND
+ * details.perPersonBreakdown is present (per-person per-day rows computed by
+ * the check itself but never previously surfaced to the AI), we extract
+ * identities from those rows instead. The existing source-data machinery
+ * (filterAndCap, buildDatePivot, buildFsmSesSourceGroups) is unchanged — it
+ * still fetches real punch/labor rows from ParsedData for those associates.
  */
 export function buildAssociateSourceSlice(
   targetResult: CheckResult,
   parsedData: ParsedData | CiParsedData | null,
 ): SourceSlice {
-  const ranked = rankIdentities(targetResult.flaggedRows);
+  let ranked = rankIdentities(targetResult.flaggedRows);
+
+  // T-729: FSM Check 3's flaggedRows are category-level (no associate field).
+  // Recover from details.perPersonBreakdown when available.
+  if (ranked.length === 0) {
+    const fallbackRows = flattenPerPersonBreakdown(targetResult.details);
+    if (fallbackRows.length > 0) {
+      ranked = rankIdentities(fallbackRows);
+    }
+  }
+
   const totalCandidates = ranked.length;
 
   if (totalCandidates === 0) {
