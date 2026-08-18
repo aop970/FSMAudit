@@ -1046,13 +1046,16 @@ fsmPd.fsmIRows = [
   invoiceRow('BP002', 'Bob Pallister',   4.00, 'Travel', d1),
   invoiceRow('BP002', 'Bob Pallister',   4.00, 'Travel', d2),
 ];
-// FSM punch rows (punchRows, not sesPunchRows — FSM program uses the PunchRow type)
-// For the source slice, filterAndCap checks punchRows via buildFsmSesSourceGroups.
-// We also add sesPunchRows for completeness — the slice builder includes both.
-fsmPd.sesPunchRows = [
-  punchRow('AP001', 'Alice Pemberton', 0.50, 'Admin',  d1),
-  punchRow('BP002', 'Bob Pallister',   3.75, 'Travel', d1),
-  punchRow('BP002', 'Bob Pallister',   4.00, 'Travel', d2),
+// FSM punch rows go in punchRows — NOT sesPunchRows (Vera, T-729 review).
+// This matters: parseWorkbook.ts's FSM return literal hard-codes
+// `sesPunchRows: []` and `shiftRows: []`, so an FSM run can never have rows in
+// those arrays. Seeding sesPunchRows here would test a shape production cannot
+// produce, and would mask the fact that buildDatePivot (which reads ONLY
+// pd.sesPunchRows/pd.shiftRows) never fires on an FSM run.
+fsmPd.punchRows = [
+  { rowNum: ++rowNum, employeeName: 'Alice Pemberton', associateId: 'AP001', timeIn: 8, timeOut: 8.5,   timeHours: 0.50, comments: 'Admin',  visitDate: d1, week: 1 },
+  { rowNum: ++rowNum, employeeName: 'Bob Pallister',   associateId: 'BP002', timeIn: 8, timeOut: 11.75, timeHours: 3.75, comments: 'Travel', visitDate: d1, week: 1 },
+  { rowNum: ++rowNum, employeeName: 'Bob Pallister',   associateId: 'BP002', timeIn: 8, timeOut: 12,    timeHours: 4.00, comments: 'Travel', visitDate: d2, week: 1 },
 ];
 
 const fsmSlice = buildAssociateSourceSlice(fsmCheck3Result, fsmPd);
@@ -1115,6 +1118,53 @@ assert(
   'T-729 regression: SES Check 3 — Dan Dayoff (worst variance) still ranks first',
   sesSlice.associates[0]?.identity.displayName === 'Dan Dayoff',
   `got ${sesSlice.associates[0]?.identity.displayName}`,
+);
+
+// ── T-729 review (Vera): the per-person per-day table must be RENDERED ──────
+//
+// T-729 read details.perPersonBreakdown for identity recovery only; the table
+// itself was never put in front of the model, so "which date" had to be
+// re-derived from raw rows that filterAndCap may have trimmed. On FSM that was
+// the ONLY route to a date, because buildDatePivot needs >= 2 date-attributable
+// legs and the FSM parser supplies only invoice (sesPunchRows/shiftRows are []).
+
+assert(
+  'T-729 review: FSM Check 3 — buildDatePivot does NOT fire on a real FSM run (only invoice leg is date-attributable)',
+  fsmSlice.associates.every((a) => a.datePivot === null),
+  `pivots: ${fsmSlice.associates.map((a) => `${a.identity.displayName}=${a.datePivot === null ? 'null' : 'present'}`).join(', ')}`,
+);
+// NB: match the SECTION HEADER, not the bare phrase — the phrase also appears
+// in the static instruction bullet, so `includes('PER-PERSON PER-DAY
+// BREAKDOWN')` is true for every prompt and proves nothing (the same trap that
+// makes a naive 'DATE-LEVEL VARIANCE' check a false positive).
+const PPB_SECTION = 'PER-PERSON PER-DAY BREAKDOWN (computed by the check itself';
+assert(
+  'T-729 review: prompt renders the PER-PERSON PER-DAY BREAKDOWN section',
+  fsmPrompt.includes(PPB_SECTION),
+  'section missing — the check\'s own per-(associate,date) table is not reaching the model',
+);
+assert(
+  'T-729 review: breakdown names the driving date for the Admin variance (8/11/2026)',
+  fsmPrompt.includes('"date": "8/11/2026"'),
+  'driving date not present in the rendered breakdown',
+);
+assert(
+  'T-729 review: breakdown carries the check-computed delta (+0.25), not a model-derived one',
+  fsmPrompt.includes('"delta": "+0.25"'),
+  'check-computed delta not present',
+);
+assert(
+  'T-729 review: both mismatching categories are broken out by name with their row counts',
+  fsmPrompt.includes('Admin — 1 (associate, date) pair(s) outside tolerance')
+    && fsmPrompt.includes('Travel — 2 (associate, date) pair(s) outside tolerance'),
+  'per-category breakdown headers missing',
+);
+// Regression: a check with no perPersonBreakdown must not grow the section.
+const sesPrompt = buildDeepDivePrompt(check3Result, buildContextBundle(check3Result, [check3Result], 'rule text'), sesSlice);
+assert(
+  'T-729 review regression: SES Check 3 prompt has NO per-person breakdown section (check emits no such details)',
+  !sesPrompt.includes(PPB_SECTION),
+  'section leaked into a check that does not provide the data',
 );
 
 console.log('\n--- T-729: actual FSM Check 3 prompt excerpt (SOURCE DATA section, first 800 chars) ---');

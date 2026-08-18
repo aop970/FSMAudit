@@ -178,6 +178,49 @@ function renderSourceSlice(slice: SourceSlice): string {
   return `SOURCE DATA:\n${header}\n\n${blocks}`;
 }
 
+/**
+ * Render the check's OWN per-person per-day breakdown (T-729 review, Vera).
+ *
+ * check03PunchRecon computes, for every mismatching category, the exact
+ * (associate, date) rows whose invoice-vs-punch delta exceeds tolerance —
+ * already tolerance-filtered and sorted by |delta| desc. T-729 wired that dict
+ * into buildAssociateSourceSlice for IDENTITY RECOVERY, which fixed "who", but
+ * the table itself was still never rendered, so "when" had to be re-derived by
+ * the model joining raw punch rows to raw invoice rows and subtracting.
+ *
+ * That re-derivation is not always possible. filterAndCap trims each source to
+ * MAX_SOURCE_ROWS_PER_ASSOCIATE_PER_SOURCE (15) rows per associate, so on a
+ * real multi-week run the very row driving a variance can be trimmed away,
+ * leaving the model to compute a delta from an incomplete set. This breakdown
+ * is capped separately (100 rows per category, largest |delta| first) and so
+ * still carries the driver.
+ *
+ * It also matters more on FSM than it looks: buildDatePivot requires >= 2
+ * date-attributable legs, and the FSM parse path returns sesPunchRows: [] and
+ * shiftRows: [] (parseWorkbook.ts), leaving invoice as the only one — so the
+ * DATE-LEVEL VARIANCE pivot never renders on an FSM run and this section is
+ * the only per-date evidence an FSM Check 3 Deep Dive receives.
+ */
+function renderPerPersonBreakdown(result: CheckResult): string | null {
+  const ppb = result.details?.['perPersonBreakdown'];
+  if (!ppb || typeof ppb !== 'object' || Array.isArray(ppb)) return null;
+
+  const blocks: string[] = [];
+  for (const [category, rows] of Object.entries(ppb as Record<string, unknown>)) {
+    if (!Array.isArray(rows) || rows.length === 0) continue;
+    const label = category.charAt(0).toUpperCase() + category.slice(1);
+    blocks.push(
+      `  ${label} — ${rows.length} (associate, date) pair(s) outside tolerance:\n${JSON.stringify(rows, null, 2)}`,
+    );
+  }
+  if (blocks.length === 0) return null;
+
+  return `PER-PERSON PER-DAY BREAKDOWN (computed by the check itself — already filtered to deltas outside tolerance and sorted by largest |delta| first):
+  Use these rows to name the SPECIFIC associate(s) and DATE(S) driving each flagged category. "delta" is punch hours minus invoice hours for that associate on that date. These figures are the check's own and are authoritative — do not recompute them from the raw source rows below (which may be trimmed), and do not average across dates.
+
+${blocks.join('\n\n')}`;
+}
+
 export function buildDeepDivePrompt(result: CheckResult, bundle: ContextBundle, sourceSlice: SourceSlice): string {
   const crossCheckSection = bundle.crossCheckRows.length > 0
     ? `CROSS-CHECK DATA (other checks where these employees appear):
@@ -186,6 +229,7 @@ ${e.rows.map((r) => `  - Check ${r.checkId} "${r.checkName}": ${JSON.stringify(r
     : 'No cross-check data available for these employees.';
 
   const sourceDataSection = renderSourceSlice(sourceSlice);
+  const perPersonSection = renderPerPersonBreakdown(result);
 
   return `Deep dive analysis requested for:
 
@@ -196,7 +240,7 @@ Flagged Count: ${result.flaggedCount}
 
 FULL FLAGGED ROWS (the check's conclusions — NOT the underlying source data):
 ${JSON.stringify(result.flaggedRows, null, 2)}
-
+${perPersonSection ? `\n${perPersonSection}\n` : ''}
 ${sourceDataSection}
 
 RELEVANT AUDIT RULE TEXT:
@@ -210,6 +254,7 @@ Your job is to root-cause the discrepancy from the SOURCE DATA above, not just r
 - If associates were omitted from the source data (see the SOURCE DATA header), say so explicitly rather than treating them as unverified — do not invent numbers for them.
 - If SOURCE DATA says no data is available (degraded/empty), say so plainly and root-cause from the flagged rows and rule text only — do not claim to have compared source rows you were not given.
 - IMPORTANT — absence of a source file's rows under an associate does NOT mean that associate is missing from that file. Source rows are matched to the associate by NAME, while the check itself may have reconciled them by associate ID, so a name spelled differently between files (middle initial, suffix, married/maiden name, extra spacing) yields no rows here even though the file does contain them. If an associate's flagged row reports non-zero hours from a source you were given no rows for, treat that as an UNVERIFIED name-matching gap and say so — never conclude the associate is absent from that file, and never report a missing-punch/missing-shift root cause on that basis alone. This risk does NOT apply when the associate's heading above shows an ID in parentheses — that source data was matched by associate ID, which does not depend on name spelling, so an absent source group there is a genuine absence, not a matching gap.
+- PER-PERSON PER-DAY BREAKDOWN: when that section is present, it is the check's own per-(associate, date) delta table and is the PRIMARY evidence for naming who and on what date. Quote its associate names, dates and deltas directly. It is authoritative over any figure you would derive yourself from the raw source rows, because those rows may have been trimmed. Its absence from a category simply means that category had no per-person rows outside tolerance.
 - DATE-LEVEL VARIANCE: when an associate's block includes a "DATE-LEVEL VARIANCE" section, use it to name the SPECIFIC DATE(S) that drive their variance — not just the period total. Quote the date and the invoice/punch(/shift) hours on that date directly from the pivot; do not average or estimate across dates. A "—" in the pivot means no rows were found for that leg on that date (never read it as zero hours). If the pivot's shift note says shift is period-level only, do not state or imply a per-date shift figure — say the shift comparison is period-level for that associate.
 
 Provide a deep dive analysis in this format:
