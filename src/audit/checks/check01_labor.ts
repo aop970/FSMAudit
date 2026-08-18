@@ -52,11 +52,24 @@ function resolveRates(
   };
 }
 
-// Billing tolerance: absorbs invoice-side cent rounding (safety margin after base-rate fix below).
-// Root cause of FSM II Merit false positives: source data stores base pay rates with sub-cent
-// precision (e.g. $18.285 = $36.57/2), but the invoice formula uses the 2-decimal displayed rate
-// ($18.29). This caused a systematic $0.06–$0.07 bill delta. Fix: effectiveBase is rounded to 2
-// decimal places so our computation matches the invoice. BILL_TOL=$0.05 is retained as a margin.
+// Billing tolerance and the two base-rate conventions:
+//
+// Real invoices use two different base-rate rounding conventions, and both are correct:
+//   A) Rounded convention (T-580, ae675c0): invoice uses the 2-decimal displayed rate.
+//      e.g. rawBase=$18.285 → invoice bills at $18.29 → effectiveBase = round(rawBase, 2).
+//   B) Full-precision convention (T-730): invoice multiplies at full sub-cent precision,
+//      rounding only the final dollar figure.
+//      e.g. rawBase=$15.525 → invoice bills at 15.525×1.2993×hours, then rounds.
+//
+// Both conventions appear in real FSM invoices — there is no single "correct" convention
+// to hardcode. Applying only A produced 18 false positives on this week's FSM data (T-730),
+// where all 18 rows at rawBase=$15.525 and $18.285 (full-day FT) were flagged.
+//
+// Fix (T-730): "either-way" check. A row passes if EITHER convention reproduces the
+// invoice bill within BILL_TOL. Only rows that fail BOTH are genuine discrepancies.
+// When reporting a genuine failure, use the closer of the two expectations so deltaBill
+// reflects the true shortfall rather than an artifact of convention choice.
+//
 // MU_TOL matches BILL_TOL: vendors sometimes truncate the per-unit markup (e.g. $8.62→$8.60)
 // before multiplying by hours. This produces a sub-$0.02 MU discrepancy that is cosmetic —
 // the bill total is still within BILL_TOL. Using a tight dollarTol on MU produced 165 false
@@ -103,24 +116,44 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
     const isAnyOT = isOverTime || isCADailyOT || isCAWeeklyOT || isPRDailyOT || isPRWeeklyOT; // used to skip rate check
 
     const { expectedRate, otRate } = resolveRates(r.sheet, rules);
-    // Round to 2 decimal places: source data may carry sub-cent precision (e.g. $18.285);
-    // the invoice formula uses the displayed 2-decimal rate. Rounding here matches that behaviour.
     const rawBase = (useOtBilling && otRate > 0) ? otRate : r.basePayRate;
-    const effectiveBase = Math.round(rawBase * 100) / 100;
 
-    const mu = type === 'FT'
-      ? effectiveBase * ftRate
+    // Two base-rate conventions occur in real FSM invoices (see comment block above).
+    // Convention A: effectiveBase = round(rawBase, 2) — invoice uses displayed 2-decimal rate.
+    // Convention B: effectiveBase = rawBase — invoice uses full sub-cent precision, rounds final bill.
+    // When rawBase already has ≤2 decimal places the two are identical (no change in behaviour).
+    const effectiveBaseA = Math.round(rawBase * 100) / 100;
+    const effectiveBaseB = rawBase; // full precision
+
+    const muA = type === 'FT'
+      ? effectiveBaseA * ftRate
       : type === 'PT'
-        ? effectiveBase * ptRate
+        ? effectiveBaseA * ptRate
         : 0;
-    const loaded = effectiveBase + mu;
-    // Round expected bill to cents before comparing: the invoice truncates the loaded
-    // per-unit rate to 2 decimal places before multiplying by hours, so our full-precision
-    // figure can diverge by up to ~$0.02 on rows with fractional hours.
-    const bill = Math.round(loaded * r.timeHours * 100) / 100;
+    const muB = type === 'FT'
+      ? effectiveBaseB * ftRate
+      : type === 'PT'
+        ? effectiveBaseB * ptRate
+        : 0;
+    const billA = Math.round((effectiveBaseA + muA) * r.timeHours * 100) / 100;
+    const billB = Math.round((effectiveBaseB + muB) * r.timeHours * 100) / 100;
 
-    const billOk = Math.abs(bill - r.billValue) <= BILL_TOL;
-    const muOk   = Math.abs(mu - r.muValue)     <= MU_TOL;
+    // Row passes bill check if EITHER convention reproduces the invoice amount within tolerance.
+    const billOkA = Math.abs(billA - r.billValue) <= BILL_TOL;
+    const billOkB = Math.abs(billB - r.billValue) <= BILL_TOL;
+    const billOk  = billOkA || billOkB;
+
+    const muOkA = Math.abs(muA - r.muValue) <= MU_TOL;
+    const muOkB = Math.abs(muB - r.muValue) <= MU_TOL;
+    const muOk  = muOkA || muOkB;
+
+    // For failure reporting: use the convention whose expected bill is closer to actual,
+    // so deltaBill reflects the true shortfall rather than a convention-choice artefact.
+    const deltaA = Math.abs(billA - r.billValue);
+    const deltaB = Math.abs(billB - r.billValue);
+    const closerConvention = deltaA <= deltaB ? 'A' : 'B';
+    const mu   = closerConvention === 'A' ? muA   : muB;
+    const bill = closerConvention === 'A' ? billA : billB;
 
     // Hourly rate validation — only for non-OT rows (OT rows store full base rate in
     // the spreadsheet but bill at the OT rate, so the rate check is skipped for them).
@@ -141,6 +174,8 @@ export function check01Labor(fsmI: LaborRow[], fsmII: LaborRow[], program?: 'fsm
         expectedBill: fmtMoney(bill),
         actualBill: fmtMoney(r.billValue),
         deltaBill: fmtMoney(r.billValue - bill),
+        // Which base-rate convention was closer: A=rounded-to-2-decimals, B=full-precision
+        closerConvention: closerConvention === 'A' ? 'rounded' : 'full-precision',
       };
       if (!rateOk) {
         entry.expectedBaseRate = fmtMoney(expectedRate);
